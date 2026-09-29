@@ -6,10 +6,91 @@ import time
 import re
 import json
 import queue
+import webbrowser
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
 
 DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "varabbs_data.json")
+
+# ==========================================
+# ZERO-DEPENDENCY SPELL CHECKER WITH USER DICTIONARY
+# ==========================================
+class SimpleSpellEngine:
+    def __init__(self, user_words=None):
+        self.words = set()
+        self.user_words = set(w.lower() for w in (user_words or []))
+        
+        # Common English baseline vocabulary
+        core_vocab = (
+            "the of and a to in is you that it he was for on are as with his they I "
+            "at be this have from or one had by word but not what all were we when "
+            "your can said there use an each which she do how their if will up other "
+            "about out many then them these so some her would make like him into time "
+            "has look two more write go see number no way could people my than first "
+            "water been call who oil its now find long down day did get come made may "
+            "part over new sound take only little work know place year live me back give "
+            "most very after thing our just name good sentence man think say great where "
+            "help through much before line right too mean old any same tell boy follow "
+            "came want show also around form three small set put end does another well "
+            "large must big even such because turn here why ask went men read need land "
+            "different home us move try kind hand picture again change off play spell air "
+            "away animal house point page letter mother answer found study still learn "
+            "should America world high every near add food between own below country plant "
+            "last school father keep tree never start city earth eye light thought head under "
+            "story saw left few along while might close something seem next hard open example "
+            "begin life always those both paper together got group often run important until "
+            "children side feet car mile night walk white sea began grow took river four carry "
+            "state once book hear stop without second late miss idea enough eat face watch "
+            "far real almost let above girl sometimes mountain cut young talk soon list song "
+            "being leave family radio packet station antenna net traffic emergency weather "
+            "message subject report checks check roster chief volunteer county status sitrep "
+            "bulletin radiogram digipeater modem tactical rig frequencies"
+        )
+        for w in core_vocab.split():
+            self.words.add(w.lower())
+
+        # Load system dictionaries if present
+        for path in ["/usr/share/dict/words", "/usr/dict/words"]:
+            if os.path.exists(path):
+                try:
+                    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                        for line in f:
+                            w = line.strip().lower()
+                            if w.isalpha():
+                                self.words.add(w)
+                    break
+                except Exception:
+                    pass
+
+    def add_word(self, word):
+        w = word.strip().lower()
+        if w:
+            self.user_words.add(w)
+            self.words.add(w)
+
+    def is_correct(self, word):
+        w = word.strip().lower()
+        if not w or len(w) <= 1 or w.isdigit():
+            return True
+        # Ham radio callsigns, grids (FM29dx), and SSID suffixes
+        if re.match(r'^[A-Z0-9]{1,3}\d[A-Z0-9]{1,4}(?:-\d{1,2})?$', word.upper()):
+            return True
+        if re.match(r'^[A-R]{2}\d{2}[A-X]{2}$', word.upper()):
+            return True
+        return (w in self.words) or (w in self.user_words)
+
+    def suggest(self, word):
+        w = word.lower()
+        all_vocab = self.words.union(self.user_words)
+        candidates = []
+        for known in all_vocab:
+            if abs(len(known) - len(w)) <= 1 and (known.startswith(w[:2]) if len(w) > 2 else True):
+                diff = sum(1 for a, b in zip(w, known) if a != b) + abs(len(w) - len(known))
+                if diff <= 2:
+                    candidates.append((diff, known))
+        candidates.sort(key=lambda x: x[0])
+        return [c[1] for c in candidates[:4]]
+
 
 class VaraBBSClient(tk.Tk):
     def __init__(self):
@@ -45,6 +126,16 @@ class VaraBBSClient(tk.Tk):
             {"bbs": "CCAR-BBS", "digi": ""}
         ]
 
+        self.default_recipients = [
+            "ALL@USA",
+            "SPACWX@USA",
+            "WX@ECBBS",
+            "NEWS@WW",
+            "W3PND",
+            "K3PGB",
+            "WB3KAS"
+        ]
+
         # Network State & Command Queue
         self.cmd_sock = None
         self.data_sock = None
@@ -54,8 +145,11 @@ class VaraBBSClient(tk.Tk):
 
         # Load Persistent Storage
         self.saved_geometry = "1280x840"
+        self.theme_mode = "light"
+        self.user_dictionary = []
         self.hf_contacts = []
         self.fm_contacts = []
+        self.recent_recipients = []
         self.inbox_msgs = []
         self.draft_msgs = []
         self.outbox_msgs = []
@@ -63,14 +157,19 @@ class VaraBBSClient(tk.Tk):
         self.trash_msgs = []
         self._load_data()
 
+        self.theme_mode = "light"
+        self.spell = SimpleSpellEngine(user_words=self.user_dictionary)
+
         # Window Setup: Set remembered geometry, then force maximize
-        self.title(f"VARA HF/FM Mail & Terminal Client by N3MEL- [{self.default_call}]")
+        self.title(f"VARA HF/FM Mail & Terminal Client by N3MEL - [{self.default_call}]")
         self.geometry(self.saved_geometry)
         self.after(50, self._maximize_window)
 
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
+        self.style = ttk.Style(self)
         self._build_ui()
+        self._apply_theme()
         self._refresh_bbs_dropdown()
         self._update_folder_counts()
         self._on_folder_select(None)
@@ -95,6 +194,8 @@ class VaraBBSClient(tk.Tk):
                     store = json.load(f)
                     
                     self.saved_geometry = store.get("window_geometry", "1280x840")
+                    self.recent_recipients = store.get("recent_recipients", list(self.default_recipients))
+                    self.user_dictionary = store.get("user_dictionary", [])
 
                     raw_hf = store.get("hf_contacts", [])
                     if not raw_hf and "bbs_contacts" in store:
@@ -124,6 +225,8 @@ class VaraBBSClient(tk.Tk):
         
         self.hf_contacts = list(self.default_hf_contacts)
         self.fm_contacts = list(self.default_fm_contacts)
+        self.recent_recipients = list(self.default_recipients)
+        self.user_dictionary = []
 
     def _save_data(self):
         try:
@@ -133,6 +236,9 @@ class VaraBBSClient(tk.Tk):
 
         data = {
             "window_geometry": self.saved_geometry,
+            "theme_mode": "light",
+            "recent_recipients": self.recent_recipients,
+            "user_dictionary": self.user_dictionary,
             "hf_contacts": self.hf_contacts,
             "fm_contacts": self.fm_contacts,
             "inbox": self.inbox_msgs,
@@ -167,6 +273,87 @@ class VaraBBSClient(tk.Tk):
 
         os._exit(0)
 
+    # ==========================================
+    # RIGHT-CLICK CONTEXT MENU (COPY / PASTE)
+    # ==========================================
+    def attach_context_menu(self, widget):
+        """Attaches a right-click Copy, Cut, Paste, and Select All menu to any widget."""
+        menu = tk.Menu(self, tearoff=0)
+        menu.add_command(label="Cut", command=lambda: widget.event_generate("<<Cut>>"))
+        menu.add_command(label="Copy", command=lambda: widget.event_generate("<<Copy>>"))
+        menu.add_command(label="Paste", command=lambda: widget.event_generate("<<Paste>>"))
+        menu.add_separator()
+        menu.add_command(label="Select All", command=lambda: self._select_all_widget(widget))
+
+        def _show_menu(event):
+            is_dark = (self.theme_mode == "dark")
+            m_bg = "#282c34" if is_dark else "#ffffff"
+            m_fg = "#e5e7eb" if is_dark else "#111827"
+            menu.config(bg=m_bg, fg=m_fg, activebackground="#2563eb", activeforeground="#ffffff")
+            menu.tk_popup(event.x_root, event.y_root)
+
+        widget.bind("<Button-3>", _show_menu)
+        widget.bind("<Button-2>", _show_menu)
+
+    def _select_all_widget(self, widget):
+        if isinstance(widget, (tk.Entry, ttk.Entry, ttk.Combobox)):
+            widget.select_range(0, tk.END)
+            widget.icursor(tk.END)
+        elif isinstance(widget, (tk.Text, scrolledtext.ScrolledText)):
+            widget.tag_add("sel", "1.0", "end-1c")
+
+    # ==========================================
+    # THEME TOGGLE & STYLING ENGINE
+    # ==========================================
+    def toggle_theme(self):
+        self.theme_mode = "light" if self.theme_mode == "dark" else "dark"
+        self._apply_theme()
+        self._save_data()
+
+    def _apply_theme(self):
+        is_dark = (self.theme_mode == "dark")
+        self.btn_theme_toggle.config(text="☀️ Light" if is_dark else "🌙 Dark")
+
+        bg_main = "#1e222b" if is_dark else "#f3f4f6"
+        bg_card = "#282c34" if is_dark else "#ffffff"
+        fg_text = "#e5e7eb" if is_dark else "#111827"
+        border_col = "#3f4451" if is_dark else "#d1d5db"
+        tree_sel = "#2563eb" if is_dark else "#3b82f6"
+
+        self.configure(bg=bg_main)
+        self.left_canvas.configure(bg=bg_main)
+
+        self.style.theme_use("clam")
+        self.style.configure(".", background=bg_main, foreground=fg_text)
+        self.style.configure("TFrame", background=bg_main)
+        self.style.configure("TLabel", background=bg_main, foreground=fg_text)
+        self.style.configure("TLabelframe", background=bg_main, foreground=fg_text)
+        self.style.configure("TLabelframe.Label", background=bg_main, foreground=fg_text, font=("Arial", 9, "bold"))
+        self.style.configure("TButton", background=bg_card, foreground=fg_text, bordercolor=border_col)
+        self.style.map("TButton", background=[("active", border_col)], foreground=[("active", fg_text)])
+        self.style.configure("TEntry", fieldbackground=bg_card, foreground=fg_text, bordercolor=border_col)
+        self.style.configure("TCombobox", fieldbackground=bg_card, background=bg_main, foreground=fg_text)
+
+        self.style.configure("Treeview", background=bg_card, foreground=fg_text, fieldbackground=bg_card, borderwidth=0)
+        self.style.configure("Treeview.Heading", background=bg_main, foreground=fg_text, bordercolor=border_col, font=("Arial", 9, "bold"))
+        self.style.map("Treeview", background=[("selected", tree_sel)], foreground=[("selected", "#ffffff")])
+
+        self.sig_text.config(
+            bg=bg_card,
+            fg=fg_text,
+            insertbackground=fg_text,
+            highlightbackground=border_col,
+            highlightcolor=tree_sel
+        )
+
+        for child in self.ref_frame.winfo_children():
+            if isinstance(child, ttk.Frame):
+                child.configure(style="TFrame")
+
+    def _open_html_forms_suite(self):
+        """Launches the online TPRFN HTML-to-ASCII form suite in default browser."""
+        webbrowser.open_new_tab("https://www.tprfn.net/html-form-suite")
+
     def _get_active_contacts(self):
         mode = self.mode_combo.get() if hasattr(self, "mode_combo") else self.default_mode
         return self.hf_contacts if mode == "HF" else self.fm_contacts
@@ -179,6 +366,7 @@ class VaraBBSClient(tk.Tk):
         self.bbs_combo = ttk.Combobox(top_bar, width=12)
         self.bbs_combo.pack(side=tk.LEFT, padx=(0, 4))
         self.bbs_combo.bind("<<ComboboxSelected>>", self._on_bbs_selected)
+        self.attach_context_menu(self.bbs_combo)
 
         self.btn_add_bbs = ttk.Button(top_bar, text="➕ Add", command=self.add_bbs_station)
         self.btn_add_bbs.pack(side=tk.LEFT, padx=1)
@@ -189,6 +377,7 @@ class VaraBBSClient(tk.Tk):
         ttk.Label(top_bar, text="Via Digi:").pack(side=tk.LEFT, padx=(0, 4))
         self.digi_entry = ttk.Entry(top_bar, width=10)
         self.digi_entry.pack(side=tk.LEFT, padx=(0, 8))
+        self.attach_context_menu(self.digi_entry)
 
         self.btn_send_rcv = ttk.Button(top_bar, text="📥 Send/Recv", command=self.start_auto_session)
         self.btn_send_rcv.pack(side=tk.LEFT, padx=3)
@@ -196,11 +385,17 @@ class VaraBBSClient(tk.Tk):
         self.btn_manual_conn = ttk.Button(top_bar, text="⚡ Connect (Term)", command=self.start_manual_session)
         self.btn_manual_conn.pack(side=tk.LEFT, padx=3)
 
-        self.btn_disconnect = ttk.Button(top_bar, text="⏹️ Disconnect", state=tk.DISABLED, command=self.manual_disconnect)
+        self.btn_disconnect = ttk.Button(top_bar, text="⏹ Disconnect", state=tk.DISABLED, command=self.manual_disconnect)
         self.btn_disconnect.pack(side=tk.LEFT, padx=3)
 
         self.btn_new_msg = ttk.Button(top_bar, text="✏️ New Message", command=self.open_composer)
         self.btn_new_msg.pack(side=tk.LEFT, padx=3)
+
+        self.btn_forms = ttk.Button(top_bar, text="📋 HTML Forms", command=self._open_html_forms_suite)
+        self.btn_forms.pack(side=tk.LEFT, padx=4)
+
+        self.btn_theme_toggle = ttk.Button(top_bar, text="🌙 Dark", width=9, command=self.toggle_theme)
+        self.btn_theme_toggle.pack(side=tk.LEFT, padx=4)
 
         self.status_lbl = ttk.Label(top_bar, text="Idle", foreground="gray", font=("Arial", 10, "bold"))
         self.status_lbl.pack(side=tk.RIGHT, padx=10)
@@ -210,16 +405,52 @@ class VaraBBSClient(tk.Tk):
         body_container = ttk.Frame(self)
         body_container.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
 
-        # Left Column (360px fixed width)
-        left_col = ttk.Frame(body_container, width=360)
-        left_col.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 6))
-        left_col.pack_propagate(False)
+        # ====================================================
+        # SCROLLABLE LEFT SIDEBAR CONTAINER
+        # ====================================================
+        left_container = ttk.Frame(body_container, width=380)
+        left_container.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 6))
+        left_container.pack_propagate(False)
 
-        folder_group = ttk.LabelFrame(left_col, text="Mailboxes", padding=6)
+        self.left_canvas = tk.Canvas(left_container, borderwidth=0, highlightthickness=0)
+        self.left_scrollbar = ttk.Scrollbar(left_container, orient=tk.VERTICAL, command=self.left_canvas.yview)
+        
+        self.scrollable_left = ttk.Frame(self.left_canvas)
+        self.scrollable_left.bind(
+            "<Configure>",
+            lambda e: self.left_canvas.configure(scrollregion=self.left_canvas.bbox("all"))
+        )
+
+        self.canvas_window = self.left_canvas.create_window((0, 0), window=self.scrollable_left, anchor="nw", width=360)
+        self.left_canvas.configure(yscrollcommand=self.left_scrollbar.set)
+
+        self.left_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.left_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        def _on_left_mousewheel(event):
+            if event.num == 5 or event.delta < 0:
+                self.left_canvas.yview_scroll(2, "units")
+            elif event.num == 4 or event.delta > 0:
+                self.left_canvas.yview_scroll(-2, "units")
+            return "break"
+
+        self.left_canvas.bind("<MouseWheel>", _on_left_mousewheel)
+        self.left_canvas.bind("<Button-4>", _on_left_mousewheel)
+        self.left_canvas.bind("<Button-5>", _on_left_mousewheel)
+
+        # Mailboxes with vertical scrollbar
+        folder_group = ttk.LabelFrame(self.scrollable_left, text="Mailboxes", padding=6)
         folder_group.pack(fill=tk.X, pady=(0, 6))
 
-        self.folder_tree = ttk.Treeview(folder_group, selectmode="browse", show="tree", height=5)
-        self.folder_tree.pack(fill=tk.X)
+        folder_frame = ttk.Frame(folder_group)
+        folder_frame.pack(fill=tk.X)
+
+        self.folder_v_scroll = ttk.Scrollbar(folder_frame, orient=tk.VERTICAL)
+        self.folder_tree = ttk.Treeview(folder_frame, selectmode="browse", show="tree", height=5, yscrollcommand=self.folder_v_scroll.set)
+        self.folder_v_scroll.config(command=self.folder_tree.yview)
+
+        self.folder_v_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.folder_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         self.f_inbox = self.folder_tree.insert("", "end", text="📥 Inbox (0)", values=("inbox",))
         self.f_drafts = self.folder_tree.insert("", "end", text="📝 Drafts (0)", values=("drafts",))
@@ -229,7 +460,8 @@ class VaraBBSClient(tk.Tk):
         self.folder_tree.bind("<<TreeviewSelect>>", self._on_folder_select)
         self.folder_tree.selection_set(self.f_inbox)
 
-        settings_group = ttk.LabelFrame(left_col, text="⚙️ Station & Modem Settings", padding=6)
+        # Settings
+        settings_group = ttk.LabelFrame(self.scrollable_left, text="⚙️ Station & Modem Settings", padding=6)
         settings_group.pack(fill=tk.X, pady=(0, 6))
 
         ttk.Label(settings_group, text="Modem Type:").pack(anchor=tk.W, pady=(1, 0))
@@ -242,11 +474,13 @@ class VaraBBSClient(tk.Tk):
         self.my_call_entry = ttk.Entry(settings_group)
         self.my_call_entry.insert(0, self.default_call)
         self.my_call_entry.pack(fill=tk.X, pady=(0, 3))
+        self.attach_context_menu(self.my_call_entry)
 
         ttk.Label(settings_group, text="Modem Host IP:").pack(anchor=tk.W, pady=(1, 0))
         self.vara_host_entry = ttk.Entry(settings_group)
         self.vara_host_entry.insert(0, self.default_host)
         self.vara_host_entry.pack(fill=tk.X, pady=(0, 3))
+        self.attach_context_menu(self.vara_host_entry)
 
         ports_row = ttk.Frame(settings_group)
         ports_row.pack(fill=tk.X, pady=(0, 3))
@@ -254,10 +488,13 @@ class VaraBBSClient(tk.Tk):
         self.cmd_port_entry = ttk.Entry(ports_row, width=6)
         self.cmd_port_entry.insert(0, self.default_cmd_port)
         self.cmd_port_entry.pack(side=tk.LEFT, padx=(2, 6))
+        self.attach_context_menu(self.cmd_port_entry)
+
         ttk.Label(ports_row, text="Data:").pack(side=tk.LEFT)
         self.data_port_entry = ttk.Entry(ports_row, width=6)
         self.data_port_entry.insert(0, self.default_data_port)
         self.data_port_entry.pack(side=tk.LEFT, padx=2)
+        self.attach_context_menu(self.data_port_entry)
 
         ttk.Label(settings_group, text="Bandwidth / Mode:").pack(anchor=tk.W, pady=(1, 0))
         self.bw_combo = ttk.Combobox(settings_group, values=["BW500", "BW2300", "BW2750"], state="readonly")
@@ -265,15 +502,14 @@ class VaraBBSClient(tk.Tk):
         self.bw_combo.pack(fill=tk.X, pady=(0, 3))
 
         ttk.Label(settings_group, text="Station Signature (6 Lines):").pack(anchor=tk.W, pady=(1, 0))
-        self.sig_text = scrolledtext.ScrolledText(settings_group, height=6, font=("Courier", 9))
+        self.sig_text = scrolledtext.ScrolledText(settings_group, height=5, font=("Courier", 9))
         self.sig_text.insert("1.0", self.default_signature)
         self.sig_text.pack(fill=tk.X, expand=False, pady=(0, 2))
+        self.attach_context_menu(self.sig_text)
 
-        # ----------------------------------------------------
-        # 3-COLUMN NODE & BBS COMMANDS MENU
-        # ----------------------------------------------------
-        node_group = ttk.LabelFrame(left_col, text="📡 Node & BBS Commands", padding=6)
-        node_group.pack(fill=tk.BOTH, expand=True)
+        # 3-Column Node Commands Menu
+        node_group = ttk.LabelFrame(self.scrollable_left, text="📡 Node & BBS Commands", padding=6)
+        node_group.pack(fill=tk.X, pady=(0, 6))
 
         node_group.columnconfigure(0, weight=1)
         node_group.columnconfigure(1, weight=1)
@@ -304,11 +540,9 @@ class VaraBBSClient(tk.Tk):
 
         ttk.Separator(node_group, orient=tk.HORIZONTAL).grid(row=4, column=0, columnspan=3, pady=(6, 4), sticky=tk.EW)
 
-        # ----------------------------------------------------
-        # BBS COMMAND QUICK REFERENCE INSTRUCTIONS
-        # ----------------------------------------------------
-        ref_frame = ttk.LabelFrame(node_group, text="📖 Command Quick Reference", padding=4)
-        ref_frame.grid(row=5, column=0, columnspan=3, sticky=tk.EW, pady=(2, 0))
+        # BBS Command Quick Reference Instructions
+        self.ref_frame = ttk.LabelFrame(node_group, text="📖 Command Quick Reference", padding=4)
+        self.ref_frame.grid(row=5, column=0, columnspan=3, sticky=tk.EW, pady=(2, 0))
 
         guide_lines = [
             ("Read", "Dbl-Click msg# in Term"),
@@ -319,7 +553,7 @@ class VaraBBSClient(tk.Tk):
         ]
 
         for desc, syntax in guide_lines:
-            row_frame = ttk.Frame(ref_frame)
+            row_frame = ttk.Frame(self.ref_frame)
             row_frame.pack(fill=tk.X, pady=1)
             ttk.Label(row_frame, text=f"• {desc}:", font=("Arial", 8, "bold")).pack(side=tk.LEFT)
             ttk.Label(row_frame, text=syntax, font=("Consolas", 8, "bold"), foreground="#0284c7").pack(side=tk.RIGHT)
@@ -330,9 +564,7 @@ class VaraBBSClient(tk.Tk):
         right_paned = ttk.PanedWindow(body_container, orient=tk.VERTICAL)
         right_paned.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        # ====================================================
-        # UPPER PANE: MESSAGE RECEIVED WINDOW
-        # ====================================================
+        # Upper Pane: Message Received Window
         msg_list_frame = ttk.LabelFrame(right_paned, text="Received Messages", padding=4)
         right_paned.add(msg_list_frame, weight=1)
 
@@ -384,9 +616,7 @@ class VaraBBSClient(tk.Tk):
         self.msg_table.bind("<Double-1>", self._on_msg_double_click)
         self.msg_table.bind("<Delete>", lambda e: self.delete_selected_message())
 
-        # ====================================================
-        # LOWER PANE: TERMINAL & MONITOR
-        # ====================================================
+        # Lower Pane: Terminal & Monitor
         term_frame = ttk.LabelFrame(right_paned, text="Live BBS Terminal & Traffic Monitor", padding=4)
         right_paned.add(term_frame, weight=2)
 
@@ -397,6 +627,7 @@ class VaraBBSClient(tk.Tk):
         self.cmd_entry = ttk.Entry(input_bar)
         self.cmd_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
         self.cmd_entry.bind("<Return>", lambda event: self.send_manual_command())
+        self.attach_context_menu(self.cmd_entry)
 
         self.btn_send_cmd = ttk.Button(input_bar, text="Send ↵", width=8, command=self.send_manual_command)
         self.btn_send_cmd.pack(side=tk.RIGHT)
@@ -410,10 +641,9 @@ class VaraBBSClient(tk.Tk):
             font=("Consolas", 10)
         )
         self.term_view.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=2, pady=(0, 2))
+        self.attach_context_menu(self.term_view)
         
-        # Double-click message number to read
         self.term_view.bind("<Double-Button-1>", self._on_term_double_click)
-        
         self.term_print("[*] Terminal ready. Double-click any message number to fetch & read.\n")
 
     # ==========================================
@@ -426,7 +656,6 @@ class VaraBBSClient(tk.Tk):
         line_end = f"{index.split('.')[0]}.end"
         line_text = self.term_view.get(line_start, line_end).strip()
 
-        # Matches lines starting with message numbers like: 28345 29-Sep B$ ...
         m = re.match(r"^(\d{1,7})\b", line_text)
         if not m:
             word = self.term_view.get(f"{index} wordstart", f"{index} wordend").strip()
@@ -439,7 +668,6 @@ class VaraBBSClient(tk.Tk):
 
             if local_msg:
                 self.term_print(f"\n[*] Displaying cached message #{msg_num} from Inbox:\n")
-                my_call = self.my_call_entry.get().strip().upper()
                 header = f"\n{'='*55}\nFrom:    {local_msg.get('from', 'BBS')}\nSubject: {local_msg.get('subj', '')}\nDate:    {local_msg.get('date', '')}\n{'-'*55}\n"
                 self.term_print(header + local_msg.get("body", "") + f"\n{'='*55}\n")
             else:
@@ -616,15 +844,15 @@ class VaraBBSClient(tk.Tk):
                 num_col = msg.get("id", str(i+1))
             elif tag == "drafts":
                 status = "Draft"
-                from_to = msg.get("to", "(No Recipient)")
+                from_to = f"{msg.get('type', 'SP')}: {msg.get('to', '(No Recipient)')}"
                 num_col = f"D-{i+1}"
             elif tag == "outbox":
                 status = "Queued"
-                from_to = msg.get("to", "")
+                from_to = f"{msg.get('type', 'SP')}: {msg.get('to', '')}"
                 num_col = "OUT"
             elif tag == "sent":
                 status = msg.get("date", "Sent")
-                from_to = msg.get("to", "")
+                from_to = f"{msg.get('type', 'SP')}: {msg.get('to', '')}"
                 num_col = f"S-{i+1}"
             else:  # trash
                 status = "Deleted"
@@ -643,7 +871,7 @@ class VaraBBSClient(tk.Tk):
         if idx < len(store):
             msg = store[idx]
             my_call = self.my_call_entry.get().strip().upper()
-            header = f"\n{'='*55}\nFrom:    {msg.get('from', my_call)}\nTo:      {msg.get('to', '')}\nSubject: {msg.get('subj', '')}\n{'-'*55}\n"
+            header = f"\n{'='*55}\nType:    {msg.get('type', 'SP')}\nFrom:    {msg.get('from', my_call)}\nTo:      {msg.get('to', '')}\nSubject: {msg.get('subj', '')}\n{'-'*55}\n"
             self.term_print(header + msg.get("body", "") + f"\n{'='*55}\n")
 
     def _on_msg_double_click(self, event):
@@ -657,7 +885,12 @@ class VaraBBSClient(tk.Tk):
             self._save_data()
             self._update_folder_counts()
             self._on_folder_select(None)
-            self.open_composer(pre_to=draft.get("to", ""), pre_subj=draft.get("subj", ""), pre_body=draft.get("body", ""))
+            self.open_composer(
+                pre_to=draft.get("to", ""),
+                pre_subj=draft.get("subj", ""),
+                pre_body=draft.get("body", ""),
+                pre_type=draft.get("type", "SP")
+            )
 
     def delete_selected_message(self):
         selected = self.msg_table.selection()
@@ -684,29 +917,176 @@ class VaraBBSClient(tk.Tk):
         self.status_lbl.config(text=text, foreground=color)
 
     # ==========================================
-    # COMPOSER WITH SAVE AS DRAFT
+    # COMPOSER WITH SPELLCHECK & USER DICTIONARY
     # ==========================================
-    def open_composer(self, pre_to="", pre_subj="", pre_body=None):
+    def open_composer(self, pre_to="", pre_subj="", pre_body=None, pre_type="SP"):
         win = tk.Toplevel(self)
         win.title("Compose Message")
-        win.geometry("580x500")
+        win.geometry("640x580")
 
-        f = ttk.Frame(win, padding=10)
+        is_dark = (self.theme_mode == "dark")
+        win_bg = "#1e222b" if is_dark else "#f3f4f6"
+        win_card = "#282c34" if is_dark else "#ffffff"
+        win_fg = "#e5e7eb" if is_dark else "#111827"
+        border_col = "#3f4451" if is_dark else "#d1d5db"
+        win.configure(bg=win_bg)
+
+        f = ttk.Frame(win, padding=12)
         f.pack(fill=tk.BOTH, expand=True)
 
-        ttk.Label(f, text="To Callsign:").grid(row=0, column=0, sticky=tk.W, pady=4)
-        to_entry = ttk.Entry(f, width=20)
-        to_entry.insert(0, pre_to)
-        to_entry.grid(row=0, column=1, sticky=tk.W, pady=4)
+        # Message Type Toggle (SP vs SB)
+        type_row = ttk.Frame(f)
+        type_row.grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=(0, 6))
 
-        ttk.Label(f, text="Subject:").grid(row=1, column=0, sticky=tk.W, pady=4)
-        subj_entry = ttk.Entry(f, width=45)
+        ttk.Label(type_row, text="Message Type:").pack(side=tk.LEFT, padx=(0, 8))
+        msg_type_var = tk.StringVar(value=pre_type)
+
+        rb_sp = ttk.Radiobutton(type_row, text="SP (Private)", variable=msg_type_var, value="SP")
+        rb_sp.pack(side=tk.LEFT, padx=6)
+
+        rb_sb = ttk.Radiobutton(type_row, text="SB (Bulletin)", variable=msg_type_var, value="SB")
+        rb_sb.pack(side=tk.LEFT, padx=6)
+
+        to_label = ttk.Label(f, text="To Callsign:")
+        to_label.grid(row=1, column=0, sticky=tk.W, pady=4)
+
+        to_row = ttk.Frame(f)
+        to_row.grid(row=1, column=1, sticky=tk.EW, pady=4)
+
+        to_combo = ttk.Combobox(to_row, width=24, values=self.recent_recipients)
+        to_combo.set(pre_to)
+        to_combo.pack(side=tk.LEFT, padx=(0, 6))
+        self.attach_context_menu(to_combo)
+
+        def add_to_history():
+            entry_val = to_combo.get().strip().upper()
+            if not entry_val:
+                return
+            if entry_val not in self.recent_recipients:
+                self.recent_recipients.insert(0, entry_val)
+                self.recent_recipients = self.recent_recipients[:30]
+                to_combo["values"] = self.recent_recipients
+                self._save_data()
+            to_combo.set(entry_val)
+
+        def del_from_history():
+            entry_val = to_combo.get().strip().upper()
+            if entry_val in self.recent_recipients:
+                self.recent_recipients.remove(entry_val)
+                to_combo["values"] = self.recent_recipients
+                to_combo.set("")
+                self._save_data()
+
+        btn_add_to = ttk.Button(to_row, text="➕ Add", width=6, command=add_to_history)
+        btn_add_to.pack(side=tk.LEFT, padx=2)
+
+        btn_del_to = ttk.Button(to_row, text="🗑️ Del", width=6, command=del_from_history)
+        btn_del_to.pack(side=tk.LEFT, padx=2)
+
+        def _on_type_changed(*args):
+            if msg_type_var.get() == "SB":
+                to_label.config(text="Bulletin @ Route:")
+            else:
+                to_label.config(text="To Callsign:")
+
+        msg_type_var.trace_add("write", _on_type_changed)
+        _on_type_changed()
+
+        ttk.Label(f, text="Subject:").grid(row=2, column=0, sticky=tk.W, pady=4)
+        subj_entry = ttk.Entry(f, width=48)
         subj_entry.insert(0, pre_subj)
-        subj_entry.grid(row=1, column=1, sticky=tk.W, pady=4)
+        subj_entry.grid(row=2, column=1, sticky=tk.W, pady=4)
+        self.attach_context_menu(subj_entry)
 
-        ttk.Label(f, text="Body:").grid(row=2, column=0, sticky=tk.NW, pady=4)
-        body_text = scrolledtext.ScrolledText(f, width=45, height=14, font=("Courier", 10))
-        body_text.grid(row=2, column=1, sticky=tk.NSEW, pady=4)
+        ttk.Label(f, text="Body:").grid(row=3, column=0, sticky=tk.NW, pady=4)
+        body_text = scrolledtext.ScrolledText(
+            f,
+            width=48,
+            height=14,
+            font=("Courier", 10),
+            bg=win_card,
+            fg=win_fg,
+            insertbackground=win_fg,
+            highlightbackground=border_col
+        )
+        body_text.grid(row=3, column=1, sticky=tk.NSEW, pady=4)
+        f.grid_rowconfigure(3, weight=1)
+        f.grid_columnconfigure(1, weight=1)
+
+        err_bg = "#7f1d1d" if is_dark else "#fecaca"
+        err_fg = "#fca5a5" if is_dark else "#991b1b"
+        body_text.tag_configure("misspelled", background=err_bg, foreground=err_fg)
+
+        spell_menu = tk.Menu(win, tearoff=0)
+
+        def run_spell_check(event=None):
+            body_text.tag_remove("misspelled", "1.0", "end")
+            lines = body_text.get("1.0", "end-1c").split("\n")
+            for line_no, line in enumerate(lines, start=1):
+                for match in re.finditer(r"\b[A-Za-z']+\b", line):
+                    word = match.group()
+                    if not self.spell.is_correct(word):
+                        start_idx = f"{line_no}.{match.start()}"
+                        end_idx = f"{line_no}.{match.end()}"
+                        body_text.tag_add("misspelled", start_idx, end_idx)
+
+        def replace_word(w_start, w_end, replacement):
+            body_text.delete(w_start, w_end)
+            body_text.insert(w_start, replacement)
+            run_spell_check()
+
+        def add_word_to_user_dict(word):
+            clean_w = word.strip().lower()
+            if clean_w and clean_w not in self.user_dictionary:
+                self.user_dictionary.append(clean_w)
+                self.spell.add_word(clean_w)
+                self._save_data()
+            run_spell_check()
+
+        def show_body_context_menu(event):
+            is_d = (self.theme_mode == "dark")
+            m_bg = "#282c34" if is_d else "#ffffff"
+            m_fg = "#e5e7eb" if is_d else "#111827"
+            spell_menu.delete(0, tk.END)
+
+            click_idx = body_text.index(f"@{event.x},{event.y}")
+            tags = body_text.tag_names(click_idx)
+
+            if "misspelled" in tags:
+                w_start = body_text.index(f"{click_idx} wordstart")
+                w_end = body_text.index(f"{click_idx} wordend")
+                clicked_word = body_text.get(w_start, w_end).strip()
+
+                candidates = self.spell.suggest(clicked_word)
+                if candidates:
+                    for cand in candidates:
+                        spell_menu.add_command(
+                            label=f"Suggested: {cand}",
+                            font=("Arial", 9, "bold"),
+                            command=lambda s=w_start, e=w_end, r=cand: replace_word(s, e, r)
+                        )
+                else:
+                    spell_menu.add_command(label="(No spelling suggestions)", state=tk.DISABLED)
+
+                # Add to Dictionary action
+                spell_menu.add_command(
+                    label=f"➕ Add '{clicked_word}' to Dictionary",
+                    command=lambda w=clicked_word: add_word_to_user_dict(w)
+                )
+                spell_menu.add_separator()
+
+            spell_menu.add_command(label="Cut", command=lambda: body_text.event_generate("<<Cut>>"))
+            spell_menu.add_command(label="Copy", command=lambda: body_text.event_generate("<<Copy>>"))
+            spell_menu.add_command(label="Paste", command=lambda: body_text.event_generate("<<Paste>>"))
+            spell_menu.add_separator()
+            spell_menu.add_command(label="Select All", command=lambda: self._select_all_widget(body_text))
+
+            spell_menu.config(bg=m_bg, fg=m_fg, activebackground="#2563eb", activeforeground="#ffffff")
+            spell_menu.tk_popup(event.x_root, event.y_root)
+
+        body_text.bind("<KeyRelease>", run_spell_check)
+        body_text.bind("<Button-3>", show_body_context_menu)
+        body_text.bind("<Button-2>", show_body_context_menu)
 
         if pre_body is not None:
             body_text.insert("1.0", pre_body)
@@ -715,32 +1095,47 @@ class VaraBBSClient(tk.Tk):
             body_text.insert("1.0", f"\n\n{active_sig}")
             body_text.mark_set("insert", "1.0")
 
+        self.after(100, run_spell_check)
+
         btn_row = ttk.Frame(f)
-        btn_row.grid(row=3, column=1, sticky=tk.E, pady=10)
+        btn_row.grid(row=4, column=1, sticky=tk.E, pady=10)
+
+        def _remember_recipient(addr):
+            clean_addr = addr.strip().upper()
+            if clean_addr and clean_addr not in self.recent_recipients:
+                self.recent_recipients.insert(0, clean_addr)
+                self.recent_recipients = self.recent_recipients[:30]
+                to_combo["values"] = self.recent_recipients
 
         def save_draft():
-            dest = to_entry.get().strip().upper()
+            dest = to_combo.get().strip().upper()
             subj = subj_entry.get().strip()
             body = body_text.get("1.0", tk.END).strip()
-            self.draft_msgs.append({"to": dest, "subj": subj, "body": body})
+            m_type = msg_type_var.get()
+
+            _remember_recipient(dest)
+            self.draft_msgs.append({"type": m_type, "to": dest, "subj": subj, "body": body})
             self._save_data()
             self._update_folder_counts()
             self._on_folder_select(None)
-            self.term_print(f"[*] Saved message draft.\n")
+            self.term_print(f"[*] Saved {m_type} message draft.\n")
             win.destroy()
 
         def queue_outbound():
-            dest = to_entry.get().strip().upper()
+            dest = to_combo.get().strip().upper()
             subj = subj_entry.get().strip()
             body = body_text.get("1.0", tk.END).strip()
+            m_type = msg_type_var.get()
             if not dest or not subj:
-                messagebox.showerror("Error", "Callsign and Subject required to send.", parent=win)
+                messagebox.showerror("Error", "Callsign/Target and Subject required to send.", parent=win)
                 return
-            self.outbox_msgs.append({"to": dest, "subj": subj, "body": body})
+
+            _remember_recipient(dest)
+            self.outbox_msgs.append({"type": m_type, "to": dest, "subj": subj, "body": body})
             self._save_data()
             self._update_folder_counts()
             self._on_folder_select(None)
-            self.term_print(f"[*] Queued outbound message for {dest} to Outbox.\n")
+            self.term_print(f"[*] Queued outbound {m_type} message for {dest} to Outbox.\n")
             win.destroy()
 
         ttk.Button(btn_row, text="💾 Save as Draft", command=save_draft).pack(side=tk.LEFT, padx=4)
@@ -877,13 +1272,9 @@ class VaraBBSClient(tk.Tk):
     # MULTI-MESSAGE EXTRACTION & INBOX REFRESH HELPER
     # ----------------------------------------------------
     def _create_inbox_messages_from_rm(self, raw_text):
-        """Robustly extracts all incoming messages from an RM response block."""
         clean_text = raw_text.replace("\r\n", "\n").replace("\r", "\n")
-
-        # Strip ending prompt artifacts
         clean_text = re.sub(r'\n[^\n]*[>?]\s*$', '', clean_text).strip()
 
-        # Split on standard packet BBS message headers
         split_pattern = r'(?m)(?=^(?:Msg|Message)\s*#?\s*:?\s*\d+|^(?:From|F):\s*[A-Za-z0-9\-@/.]+)'
         raw_parts = re.split(split_pattern, clean_text)
 
@@ -893,7 +1284,6 @@ class VaraBBSClient(tk.Tk):
             if not item_text or len(item_text) < 15:
                 continue
 
-            # Strip leading prompt fragments (e.g. 'de N3MEL>')
             item_text = re.sub(r'^[^\n]*[>:]\s*\n?', '', item_text).strip()
 
             id_m = re.search(r'(?:Msg|Message)\s*#?\s*:?\s*(\d+)', item_text, re.IGNORECASE)
@@ -993,6 +1383,7 @@ class VaraBBSClient(tk.Tk):
         outbox_wait = 40.0 if mode == "HF" else 1.2
         while self.outbox_msgs and not self.abort_requested:
             msg = self.outbox_msgs.pop(0)
+            cmd_prefix = msg.get("type", "SP").upper()
 
             start_w = time.time()
             while time.time() - start_w < outbox_wait:
@@ -1000,8 +1391,8 @@ class VaraBBSClient(tk.Tk):
                     break
                 time.sleep(0.2)
 
-            self.term_print(f">>> SP {msg['to']}\n")
-            self._send_data(f"SP {msg['to']}\r")
+            self.term_print(f">>> {cmd_prefix} {msg['to']}\n")
+            self._send_data(f"{cmd_prefix} {msg['to']}\r")
 
             self._recv_data_until_prompt(timeout=40.0 if mode == "HF" else 15.0, quiet_delay=1.2)
             if self.abort_requested:
@@ -1041,7 +1432,7 @@ class VaraBBSClient(tk.Tk):
 
             msg["date"] = time.strftime("%m/%d %H:%M")
             self.sent_msgs.append(msg)
-            self.term_print(f"[+] Message successfully posted to {msg['to']}!\n")
+            self.term_print(f"[+] Message successfully posted as {cmd_prefix} to {msg['to']}!\n")
 
         self._save_data()
         self.after(0, self._update_folder_counts)
