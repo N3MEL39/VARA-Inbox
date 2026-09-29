@@ -1,0 +1,28 @@
+{
+  "window_geometry": "1600x837+26+21",
+  "hf_contacts": [
+    {
+      "bbs": "N3MEL-2",
+      "digi": ""
+    },
+    {
+      "bbs": "N3MEL-7",
+      "digi": ""
+    }
+  ],
+  "fm_contacts": [
+    {
+      "bbs": "N3MEL-2",
+      "digi": ""
+    },
+    {
+      "bbs": "N3MEL-7",
+      "digi": ""
+    }
+  ],
+  "inbox": [],
+  "drafts": [],
+  "outbox": [],
+  "sent": [],
+  "trash": []
+}
