@@ -20,7 +20,6 @@ class SimpleSpellEngine:
         self.words = set()
         self.user_words = set(w.lower() for w in (user_words or []))
         
-        # Common English baseline vocabulary
         core_vocab = (
             "the of and a to in is you that it he was for on are as with his they I "
             "at be this have from or one had by word but not what all were we when "
@@ -49,7 +48,6 @@ class SimpleSpellEngine:
         for w in core_vocab.split():
             self.words.add(w.lower())
 
-        # Load system dictionaries if present
         for path in ["/usr/share/dict/words", "/usr/dict/words"]:
             if os.path.exists(path):
                 try:
@@ -72,7 +70,6 @@ class SimpleSpellEngine:
         w = word.strip().lower()
         if not w or len(w) <= 1 or w.isdigit():
             return True
-        # Ham radio callsigns, grids (FM29dx), and SSID suffixes
         if re.match(r'^[A-Z0-9]{1,3}\d[A-Z0-9]{1,4}(?:-\d{1,2})?$', word.upper()):
             return True
         if re.match(r'^[A-R]{2}\d{2}[A-X]{2}$', word.upper()):
@@ -96,45 +93,43 @@ class VaraBBSClient(tk.Tk):
     def __init__(self):
         super().__init__()
 
-        # Station & Modem Defaults
-        self.default_call = "N3MEL"
-        self.default_host = "192.168.86.34"
-        self.default_mode = "HF"  # "HF" or "FM"
-        self.default_cmd_port = "8358"
-        self.default_data_port = "8359"
-        self.default_bw = "BW500"
+        # Station & Modem Fallback Defaults
+        self.default_call = "Your Call Here"
+        self.default_host = "127.0.0.1"
+        self.default_mode = "FM"
+        self.default_cmd_port = "8300"
+        self.default_data_port = "8301"
+        self.default_bw = "NARROW"
+        self.default_signature = ""
+        self.default_hf_dwell = "20.0"
+        self.default_fm_dwell = "1.5"
         
-        self.default_signature = (
-            "---\n"
-            "73, Glenn - N3MEL\n"
-            "Grid: FM29dx | Southeastern PA\n"
-            "TPRFN EPA Hub Station"
-        )
-        
-        # Default Contacts Split by Mode
         self.default_hf_contacts = [
-            {"bbs": "MELBBS", "digi": ""},
-            {"bbs": "W3PND-1", "digi": ""},
-            {"bbs": "K3PGB-1", "digi": ""},
-            {"bbs": "N3LGN-1", "digi": ""},
-            {"bbs": "WB3KAS-1", "digi": ""}
+            {"bbs": "N3MEL-2", "digi": ""},
+            {"bbs": "N3MEL-7", "digi": ""}
         ]
         self.default_fm_contacts = [
-            {"bbs": "MELBBS-1", "digi": "W3PND-2"},
-            {"bbs": "W3PND-4", "digi": ""},
-            {"bbs": "K3PGB-4", "digi": "WIDE1-1"},
-            {"bbs": "CCAR-BBS", "digi": ""}
+            {"bbs": "N3MEL-2", "digi": ""},
+            {"bbs": "N3MEL-7", "digi": ""}
         ]
 
         self.default_recipients = [
             "ALL@USA",
             "SPACWX@USA",
             "WX@ECBBS",
-            "NEWS@WW",
-            "W3PND",
-            "K3PGB",
-            "WB3KAS"
+            "NEWS@WW"
         ]
+
+        # Active Settings Variables
+        self.current_call = self.default_call
+        self.current_host = self.default_host
+        self.current_mode = self.default_mode
+        self.current_cmd_port = self.default_cmd_port
+        self.current_data_port = self.default_data_port
+        self.current_bw = self.default_bw
+        self.current_signature = self.default_signature
+        self.hf_dwell = self.default_hf_dwell
+        self.fm_dwell = self.default_fm_dwell
 
         # Network State & Command Queue
         self.cmd_sock = None
@@ -142,6 +137,18 @@ class VaraBBSClient(tk.Tk):
         self.worker_thread = None
         self.abort_requested = False
         self.tx_manual_queue = queue.Queue()
+
+        # Inbound Host Listener & Mailbox Engine State
+        self.listener_active = False
+        self.listener_thread = None
+        self.listener_cmd_sock = None
+        self.listener_data_sock = None
+        self.listener_stop_event = threading.Event()
+        self.mailbox_in_session = False
+        self.remote_call = ""
+        self.mb_state = "CMD"  # "CMD", "SP_SUBJ", "SP_BODY"
+        self.mb_rx_msg = {}
+        self.mb_line_buffer = ""
 
         # Load Persistent Storage
         self.saved_geometry = "1280x840"
@@ -157,11 +164,10 @@ class VaraBBSClient(tk.Tk):
         self.trash_msgs = []
         self._load_data()
 
-        self.theme_mode = "light"
         self.spell = SimpleSpellEngine(user_words=self.user_dictionary)
 
-        # Window Setup: Set remembered geometry, then force maximize
-        self.title(f"VARA HF/FM Mail & Terminal Client by N3MEL - [{self.default_call}]")
+        # Window Setup
+        self.title(f"VARA HF/FM Mail & Terminal Client by N3MEL - [{self.current_call}]")
         self.geometry(self.saved_geometry)
         self.after(50, self._maximize_window)
 
@@ -178,7 +184,6 @@ class VaraBBSClient(tk.Tk):
     # PERSISTENT STORAGE HANDLERS (JSON)
     # ==========================================
     def _maximize_window(self):
-        """Forces GUI window to open maximized across Windows and Linux."""
         try:
             self.state('zoomed')
         except Exception:
@@ -194,8 +199,35 @@ class VaraBBSClient(tk.Tk):
                     store = json.load(f)
                     
                     self.saved_geometry = store.get("window_geometry", "1280x840")
+                    self.theme_mode = store.get("theme_mode", "light")
                     self.recent_recipients = store.get("recent_recipients", list(self.default_recipients))
                     self.user_dictionary = store.get("user_dictionary", [])
+
+                    self.current_call = store.get("my_call", self.default_call)
+                    self.current_host = store.get("modem_host", self.default_host)
+                    
+                    loaded_mode = str(store.get("modem_mode", self.default_mode)).strip().upper()
+                    if "HF" in loaded_mode:
+                        self.current_mode = "HF"
+                    else:
+                        self.current_mode = "FM"
+
+                    self.current_cmd_port = store.get("cmd_port", self.default_cmd_port)
+                    self.current_data_port = store.get("data_port", self.default_data_port)
+                    
+                    if self.current_mode == "FM" and self.current_cmd_port == "8000":
+                        self.current_cmd_port = "8300"
+                        self.current_data_port = "8301"
+
+                    self.current_bw = store.get("bandwidth", self.default_bw)
+                    if self.current_bw not in ("BW500", "BW2300", "BW2750", "NARROW", "WIDE"):
+                        self.current_bw = "BW500" if self.current_mode == "HF" else "NARROW"
+
+                    self.current_signature = store.get("signature", self.default_signature)
+
+                    # Load per-mode dwell settings
+                    self.hf_dwell = str(store.get("hf_dwell", self.default_hf_dwell))
+                    self.fm_dwell = str(store.get("fm_dwell", self.default_fm_dwell))
 
                     raw_hf = store.get("hf_contacts", [])
                     if not raw_hf and "bbs_contacts" in store:
@@ -223,6 +255,16 @@ class VaraBBSClient(tk.Tk):
             except Exception as e:
                 print(f"[!] Warning: Could not parse database file ({e}). Starting with defaults.")
         
+        self.current_call = self.default_call
+        self.current_host = self.default_host
+        self.current_mode = self.default_mode
+        self.current_cmd_port = self.default_cmd_port
+        self.current_data_port = self.default_data_port
+        self.current_bw = self.default_bw
+        self.current_signature = self.default_signature
+        self.hf_dwell = self.default_hf_dwell
+        self.fm_dwell = self.default_fm_dwell
+
         self.hf_contacts = list(self.default_hf_contacts)
         self.fm_contacts = list(self.default_fm_contacts)
         self.recent_recipients = list(self.default_recipients)
@@ -234,9 +276,27 @@ class VaraBBSClient(tk.Tk):
         except Exception:
             pass
 
+        # Update cache for current mode's dwell time from GUI entry if initialized
+        if hasattr(self, "dwell_entry") and hasattr(self, "mode_combo"):
+            current_ui_mode = self.mode_combo.get().strip().upper()
+            dwell_val = self.dwell_entry.get().strip()
+            if current_ui_mode == "HF":
+                self.hf_dwell = dwell_val
+            else:
+                self.fm_dwell = dwell_val
+
         data = {
             "window_geometry": self.saved_geometry,
-            "theme_mode": "light",
+            "theme_mode": self.theme_mode,
+            "my_call": self.my_call_entry.get().strip().upper() if hasattr(self, "my_call_entry") else self.current_call,
+            "modem_host": self.vara_host_entry.get().strip() if hasattr(self, "vara_host_entry") else self.current_host,
+            "modem_mode": self.mode_combo.get().strip() if hasattr(self, "mode_combo") else self.current_mode,
+            "cmd_port": self.cmd_port_entry.get().strip() if hasattr(self, "cmd_port_entry") else self.current_cmd_port,
+            "data_port": self.data_port_entry.get().strip() if hasattr(self, "data_port_entry") else self.current_data_port,
+            "bandwidth": self.bw_combo.get().strip() if hasattr(self, "bw_combo") else self.current_bw,
+            "signature": self.sig_text.get("1.0", tk.END).strip() if hasattr(self, "sig_text") else self.current_signature,
+            "hf_dwell": self.hf_dwell,
+            "fm_dwell": self.fm_dwell,
             "recent_recipients": self.recent_recipients,
             "user_dictionary": self.user_dictionary,
             "hf_contacts": self.hf_contacts,
@@ -256,6 +316,7 @@ class VaraBBSClient(tk.Tk):
     def on_close(self):
         self._save_data()
         self.abort_requested = True
+        self._stop_listener_service()
         try:
             if self.cmd_sock:
                 self.cmd_sock.sendall(b"ABORT\rDISCONNECT\r")
@@ -277,7 +338,6 @@ class VaraBBSClient(tk.Tk):
     # RIGHT-CLICK CONTEXT MENU (COPY / PASTE)
     # ==========================================
     def attach_context_menu(self, widget):
-        """Attaches a right-click Copy, Cut, Paste, and Select All menu to any widget."""
         menu = tk.Menu(self, tearoff=0)
         menu.add_command(label="Cut", command=lambda: widget.event_generate("<<Cut>>"))
         menu.add_command(label="Copy", command=lambda: widget.event_generate("<<Copy>>"))
@@ -312,7 +372,7 @@ class VaraBBSClient(tk.Tk):
 
     def _apply_theme(self):
         is_dark = (self.theme_mode == "dark")
-        self.btn_theme_toggle.config(text="☀️ Light" if is_dark else "🌙 Dark")
+        self.btn_theme_toggle.config(text="[Light]" if is_dark else "[Dark]")
 
         bg_main = "#1e222b" if is_dark else "#f3f4f6"
         bg_card = "#282c34" if is_dark else "#ffffff"
@@ -351,11 +411,10 @@ class VaraBBSClient(tk.Tk):
                 child.configure(style="TFrame")
 
     def _open_html_forms_suite(self):
-        """Launches the online TPRFN HTML-to-ASCII form suite in default browser."""
         webbrowser.open_new_tab("https://www.tprfn.net/html-form-suite")
 
     def _get_active_contacts(self):
-        mode = self.mode_combo.get() if hasattr(self, "mode_combo") else self.default_mode
+        mode = self.mode_combo.get() if hasattr(self, "mode_combo") else self.current_mode
         return self.hf_contacts if mode == "HF" else self.fm_contacts
 
     def _build_ui(self):
@@ -368,10 +427,10 @@ class VaraBBSClient(tk.Tk):
         self.bbs_combo.bind("<<ComboboxSelected>>", self._on_bbs_selected)
         self.attach_context_menu(self.bbs_combo)
 
-        self.btn_add_bbs = ttk.Button(top_bar, text="➕ Add", command=self.add_bbs_station)
+        self.btn_add_bbs = ttk.Button(top_bar, text="[+] Add", command=self.add_bbs_station)
         self.btn_add_bbs.pack(side=tk.LEFT, padx=1)
 
-        self.btn_del_bbs = ttk.Button(top_bar, text="🗑️ Del", command=self.delete_bbs_station)
+        self.btn_del_bbs = ttk.Button(top_bar, text="[-] Del", command=self.delete_bbs_station)
         self.btn_del_bbs.pack(side=tk.LEFT, padx=(1, 8))
 
         ttk.Label(top_bar, text="Via Digi:").pack(side=tk.LEFT, padx=(0, 4))
@@ -379,22 +438,25 @@ class VaraBBSClient(tk.Tk):
         self.digi_entry.pack(side=tk.LEFT, padx=(0, 8))
         self.attach_context_menu(self.digi_entry)
 
-        self.btn_send_rcv = ttk.Button(top_bar, text="📥 Send/Recv", command=self.start_auto_session)
+        self.btn_send_rcv = ttk.Button(top_bar, text="Send/Recv", command=self.start_auto_session)
         self.btn_send_rcv.pack(side=tk.LEFT, padx=3)
 
-        self.btn_manual_conn = ttk.Button(top_bar, text="⚡ Connect (Term)", command=self.start_manual_session)
+        self.btn_manual_conn = ttk.Button(top_bar, text="Connect (Term)", command=self.start_manual_session)
         self.btn_manual_conn.pack(side=tk.LEFT, padx=3)
 
-        self.btn_disconnect = ttk.Button(top_bar, text="⏹ Disconnect", state=tk.DISABLED, command=self.manual_disconnect)
+        self.btn_disconnect = ttk.Button(top_bar, text="Disconnect", state=tk.DISABLED, command=self.manual_disconnect)
         self.btn_disconnect.pack(side=tk.LEFT, padx=3)
 
-        self.btn_new_msg = ttk.Button(top_bar, text="✏️ New Message", command=self.open_composer)
+        self.btn_listen = ttk.Button(top_bar, text="Mailbox Standby", command=self.toggle_mailbox_listener)
+        self.btn_listen.pack(side=tk.LEFT, padx=3)
+
+        self.btn_new_msg = ttk.Button(top_bar, text="New Message", command=self.open_composer)
         self.btn_new_msg.pack(side=tk.LEFT, padx=3)
 
-        self.btn_forms = ttk.Button(top_bar, text="📋 HTML Forms", command=self._open_html_forms_suite)
+        self.btn_forms = ttk.Button(top_bar, text="HTML Forms", command=self._open_html_forms_suite)
         self.btn_forms.pack(side=tk.LEFT, padx=4)
 
-        self.btn_theme_toggle = ttk.Button(top_bar, text="🌙 Dark", width=9, command=self.toggle_theme)
+        self.btn_theme_toggle = ttk.Button(top_bar, text="[Dark]", width=8, command=self.toggle_theme)
         self.btn_theme_toggle.pack(side=tk.LEFT, padx=4)
 
         self.status_lbl = ttk.Label(top_bar, text="Idle", foreground="gray", font=("Arial", 10, "bold"))
@@ -405,9 +467,7 @@ class VaraBBSClient(tk.Tk):
         body_container = ttk.Frame(self)
         body_container.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
 
-        # ====================================================
-        # SCROLLABLE LEFT SIDEBAR CONTAINER
-        # ====================================================
+        # Scrollable Left Sidebar
         left_container = ttk.Frame(body_container, width=380)
         left_container.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 6))
         left_container.pack_propagate(False)
@@ -438,7 +498,7 @@ class VaraBBSClient(tk.Tk):
         self.left_canvas.bind("<Button-4>", _on_left_mousewheel)
         self.left_canvas.bind("<Button-5>", _on_left_mousewheel)
 
-        # Mailboxes with vertical scrollbar
+        # Mailboxes
         folder_group = ttk.LabelFrame(self.scrollable_left, text="Mailboxes", padding=6)
         folder_group.pack(fill=tk.X, pady=(0, 6))
 
@@ -452,63 +512,71 @@ class VaraBBSClient(tk.Tk):
         self.folder_v_scroll.pack(side=tk.RIGHT, fill=tk.Y)
         self.folder_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        self.f_inbox = self.folder_tree.insert("", "end", text="📥 Inbox (0)", values=("inbox",))
-        self.f_drafts = self.folder_tree.insert("", "end", text="📝 Drafts (0)", values=("drafts",))
-        self.f_outbox = self.folder_tree.insert("", "end", text="📤 Outbox (0)", values=("outbox",))
-        self.f_sent = self.folder_tree.insert("", "end", text="📁 Sent (0)", values=("sent",))
-        self.f_trash = self.folder_tree.insert("", "end", text="🗑️ Trash (0)", values=("trash",))
+        self.f_inbox = self.folder_tree.insert("", "end", text="Inbox (0)", values=("inbox",))
+        self.f_drafts = self.folder_tree.insert("", "end", text="Drafts (0)", values=("drafts",))
+        self.f_outbox = self.folder_tree.insert("", "end", text="Outbox (0)", values=("outbox",))
+        self.f_sent = self.folder_tree.insert("", "end", text="Sent (0)", values=("sent",))
+        self.f_trash = self.folder_tree.insert("", "end", text="Trash (0)", values=("trash",))
         self.folder_tree.bind("<<TreeviewSelect>>", self._on_folder_select)
         self.folder_tree.selection_set(self.f_inbox)
 
         # Settings
-        settings_group = ttk.LabelFrame(self.scrollable_left, text="⚙️ Station & Modem Settings", padding=6)
+        settings_group = ttk.LabelFrame(self.scrollable_left, text="Station & Modem Settings", padding=6)
         settings_group.pack(fill=tk.X, pady=(0, 6))
 
         ttk.Label(settings_group, text="Modem Type:").pack(anchor=tk.W, pady=(1, 0))
         self.mode_combo = ttk.Combobox(settings_group, values=["HF", "FM"], state="readonly")
-        self.mode_combo.set(self.default_mode)
+        self.mode_combo.set(self.current_mode)
         self.mode_combo.pack(fill=tk.X, pady=(0, 3))
         self.mode_combo.bind("<<ComboboxSelected>>", self._on_mode_change)
 
         ttk.Label(settings_group, text="My Callsign:").pack(anchor=tk.W, pady=(1, 0))
         self.my_call_entry = ttk.Entry(settings_group)
-        self.my_call_entry.insert(0, self.default_call)
+        self.my_call_entry.insert(0, self.current_call)
         self.my_call_entry.pack(fill=tk.X, pady=(0, 3))
         self.attach_context_menu(self.my_call_entry)
 
         ttk.Label(settings_group, text="Modem Host IP:").pack(anchor=tk.W, pady=(1, 0))
         self.vara_host_entry = ttk.Entry(settings_group)
-        self.vara_host_entry.insert(0, self.default_host)
+        self.vara_host_entry.insert(0, self.current_host)
         self.vara_host_entry.pack(fill=tk.X, pady=(0, 3))
         self.attach_context_menu(self.vara_host_entry)
 
         ports_row = ttk.Frame(settings_group)
         ports_row.pack(fill=tk.X, pady=(0, 3))
         ttk.Label(ports_row, text="Cmd:").pack(side=tk.LEFT)
-        self.cmd_port_entry = ttk.Entry(ports_row, width=6)
-        self.cmd_port_entry.insert(0, self.default_cmd_port)
-        self.cmd_port_entry.pack(side=tk.LEFT, padx=(2, 6))
+        self.cmd_port_entry = ttk.Entry(ports_row, width=5)
+        self.cmd_port_entry.insert(0, self.current_cmd_port)
+        self.cmd_port_entry.pack(side=tk.LEFT, padx=(2, 4))
         self.attach_context_menu(self.cmd_port_entry)
 
         ttk.Label(ports_row, text="Data:").pack(side=tk.LEFT)
-        self.data_port_entry = ttk.Entry(ports_row, width=6)
-        self.data_port_entry.insert(0, self.default_data_port)
-        self.data_port_entry.pack(side=tk.LEFT, padx=2)
+        self.data_port_entry = ttk.Entry(ports_row, width=5)
+        self.data_port_entry.insert(0, self.current_data_port)
+        self.data_port_entry.pack(side=tk.LEFT, padx=(2, 4))
         self.attach_context_menu(self.data_port_entry)
 
+        ttk.Label(ports_row, text="Dwell (s):").pack(side=tk.LEFT)
+        self.dwell_entry = ttk.Entry(ports_row, width=5)
+        active_dwell = self.hf_dwell if self.current_mode == "HF" else self.fm_dwell
+        self.dwell_entry.insert(0, active_dwell)
+        self.dwell_entry.pack(side=tk.LEFT, padx=(2, 0))
+        self.attach_context_menu(self.dwell_entry)
+
         ttk.Label(settings_group, text="Bandwidth / Mode:").pack(anchor=tk.W, pady=(1, 0))
-        self.bw_combo = ttk.Combobox(settings_group, values=["BW500", "BW2300", "BW2750"], state="readonly")
-        self.bw_combo.set(self.default_bw)
+        bw_options = ["BW500", "BW2300", "BW2750"] if self.current_mode == "HF" else ["NARROW", "WIDE"]
+        self.bw_combo = ttk.Combobox(settings_group, values=bw_options, state="readonly")
+        self.bw_combo.set(self.current_bw)
         self.bw_combo.pack(fill=tk.X, pady=(0, 3))
 
         ttk.Label(settings_group, text="Station Signature (6 Lines):").pack(anchor=tk.W, pady=(1, 0))
         self.sig_text = scrolledtext.ScrolledText(settings_group, height=5, font=("Courier", 9))
-        self.sig_text.insert("1.0", self.default_signature)
+        self.sig_text.insert("1.0", self.current_signature)
         self.sig_text.pack(fill=tk.X, expand=False, pady=(0, 2))
         self.attach_context_menu(self.sig_text)
 
         # 3-Column Node Commands Menu
-        node_group = ttk.LabelFrame(self.scrollable_left, text="📡 Node & BBS Commands", padding=6)
+        node_group = ttk.LabelFrame(self.scrollable_left, text="Node & BBS Commands", padding=6)
         node_group.pack(fill=tk.X, pady=(0, 6))
 
         node_group.columnconfigure(0, weight=1)
@@ -540,8 +608,7 @@ class VaraBBSClient(tk.Tk):
 
         ttk.Separator(node_group, orient=tk.HORIZONTAL).grid(row=4, column=0, columnspan=3, pady=(6, 4), sticky=tk.EW)
 
-        # BBS Command Quick Reference Instructions
-        self.ref_frame = ttk.LabelFrame(node_group, text="📖 Command Quick Reference", padding=4)
+        self.ref_frame = ttk.LabelFrame(node_group, text="Command Quick Reference", padding=4)
         self.ref_frame.grid(row=5, column=0, columnspan=3, sticky=tk.EW, pady=(2, 0))
 
         guide_lines = [
@@ -555,22 +622,19 @@ class VaraBBSClient(tk.Tk):
         for desc, syntax in guide_lines:
             row_frame = ttk.Frame(self.ref_frame)
             row_frame.pack(fill=tk.X, pady=1)
-            ttk.Label(row_frame, text=f"• {desc}:", font=("Arial", 8, "bold")).pack(side=tk.LEFT)
+            ttk.Label(row_frame, text=f"* {desc}:", font=("Arial", 8, "bold")).pack(side=tk.LEFT)
             ttk.Label(row_frame, text=syntax, font=("Consolas", 8, "bold"), foreground="#0284c7").pack(side=tk.RIGHT)
 
-        # ----------------------------------------------------
-        # RIGHT COLUMN: DYNAMIC PANEDWINDOW
-        # ----------------------------------------------------
+        # Right Column
         right_paned = ttk.PanedWindow(body_container, orient=tk.VERTICAL)
         right_paned.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        # Upper Pane: Message Received Window
         msg_list_frame = ttk.LabelFrame(right_paned, text="Received Messages", padding=4)
         right_paned.add(msg_list_frame, weight=1)
 
         list_toolbar = ttk.Frame(msg_list_frame)
         list_toolbar.pack(side=tk.TOP, fill=tk.X, pady=(0, 4))
-        self.btn_del_msg = ttk.Button(list_toolbar, text="🗑 Delete Message", command=self.delete_selected_message)
+        self.btn_del_msg = ttk.Button(list_toolbar, text="[-] Delete Message", command=self.delete_selected_message)
         self.btn_del_msg.pack(side=tk.LEFT)
 
         table_container = ttk.Frame(msg_list_frame)
@@ -616,7 +680,6 @@ class VaraBBSClient(tk.Tk):
         self.msg_table.bind("<Double-1>", self._on_msg_double_click)
         self.msg_table.bind("<Delete>", lambda e: self.delete_selected_message())
 
-        # Lower Pane: Terminal & Monitor
         term_frame = ttk.LabelFrame(right_paned, text="Live BBS Terminal & Traffic Monitor", padding=4)
         right_paned.add(term_frame, weight=2)
 
@@ -629,7 +692,7 @@ class VaraBBSClient(tk.Tk):
         self.cmd_entry.bind("<Return>", lambda event: self.send_manual_command())
         self.attach_context_menu(self.cmd_entry)
 
-        self.btn_send_cmd = ttk.Button(input_bar, text="Send ↵", width=8, command=self.send_manual_command)
+        self.btn_send_cmd = ttk.Button(input_bar, text="Send Enter", width=10, command=self.send_manual_command)
         self.btn_send_cmd.pack(side=tk.RIGHT)
 
         self.term_view = scrolledtext.ScrolledText(
@@ -646,11 +709,7 @@ class VaraBBSClient(tk.Tk):
         self.term_view.bind("<Double-Button-1>", self._on_term_double_click)
         self.term_print("[*] Terminal ready. Double-click any message number to fetch & read.\n")
 
-    # ==========================================
-    # TERMINAL DOUBLE-CLICK TO READ MESSAGE
-    # ==========================================
     def _on_term_double_click(self, event):
-        """Extracts the message number under the cursor and sends 'R <num>' to the BBS."""
         index = self.term_view.index(f"@{event.x},{event.y}")
         line_start = f"{index.split('.')[0]}.0"
         line_end = f"{index.split('.')[0]}.end"
@@ -678,9 +737,6 @@ class VaraBBSClient(tk.Tk):
                     self.term_print(f"\n[!] Cannot fetch #{msg_num}: Not connected to BBS. Connect first to read.\n")
             return "break"
 
-    # ==========================================
-    # MODEM MODE AUTO-CONFIG & CONTACT SWAPPING
-    # ==========================================
     def _refresh_bbs_dropdown(self):
         active_contacts = self._get_active_contacts()
         bbs_names = [c["bbs"] for c in active_contacts]
@@ -695,29 +751,47 @@ class VaraBBSClient(tk.Tk):
             self.digi_entry.delete(0, tk.END)
 
     def _on_mode_change(self, event=None):
-        mode = self.mode_combo.get()
-        if mode == "HF":
+        new_mode = self.mode_combo.get().strip().upper()
+        
+        # Save outgoing mode dwell value before swapping
+        if hasattr(self, "dwell_entry"):
+            old_dwell = self.dwell_entry.get().strip()
+            if self.current_mode == "HF":
+                self.hf_dwell = old_dwell
+            else:
+                self.fm_dwell = old_dwell
+
+        self.current_mode = new_mode
+
+        restart_listener = self.listener_active
+        if restart_listener:
+            self._stop_listener_service()
+
+        if new_mode == "HF":
             self.cmd_port_entry.delete(0, tk.END)
             self.cmd_port_entry.insert(0, "8358")
             self.data_port_entry.delete(0, tk.END)
             self.data_port_entry.insert(0, "8359")
+            self.dwell_entry.delete(0, tk.END)
+            self.dwell_entry.insert(0, self.hf_dwell)
             self.bw_combo.config(values=["BW500", "BW2300", "BW2750"])
             self.bw_combo.set("BW500")
-            self.term_print("[*] Switched to VARA HF (Ports 8358/8359, BW500, HF Contact List).\n")
+            self.term_print(f"[*] Switched to VARA HF (Ports 8358/8359, BW500, Dwell: {self.hf_dwell}s).\n")
         else:
             self.cmd_port_entry.delete(0, tk.END)
             self.cmd_port_entry.insert(0, "8300")
             self.data_port_entry.delete(0, tk.END)
             self.data_port_entry.insert(0, "8301")
+            self.dwell_entry.delete(0, tk.END)
+            self.dwell_entry.insert(0, self.fm_dwell)
             self.bw_combo.config(values=["NARROW", "WIDE"])
             self.bw_combo.set("NARROW")
-            self.term_print("[*] Switched to VARA FM (Ports 8300/8301, NARROW, FM Contact List).\n")
+            self.term_print(f"[*] Switched to VARA FM (Ports 8300/8301, NARROW, Dwell: {self.fm_dwell}s).\n")
 
         self._refresh_bbs_dropdown()
+        if restart_listener:
+            self._start_listener_service()
 
-    # ==========================================
-    # BBS & DIGI SELECTION / MANAGEMENT
-    # ==========================================
     def _on_bbs_selected(self, event=None):
         selected_bbs = self.bbs_combo.get().strip().upper()
         active_contacts = self._get_active_contacts()
@@ -773,9 +847,6 @@ class VaraBBSClient(tk.Tk):
         else:
             messagebox.showwarning("Warning", "Selected BBS not found in current list.")
 
-    # ==========================================
-    # TERMINAL DISPLAY & TYPE-AHEAD LOGIC
-    # ==========================================
     def term_print(self, text):
         def _append():
             clean_text = text.replace("\r\n", "\n").replace("\r", "\n")
@@ -797,8 +868,10 @@ class VaraBBSClient(tk.Tk):
 
         if self.worker_thread and self.worker_thread.is_alive() and self.data_sock:
             self.tx_manual_queue.put(cmd)
+        elif self.mailbox_in_session and self.listener_data_sock:
+            self._send_listener_data(f"\n[SYSOP]: {cmd}\r\n")
         else:
-            self.term_print("[!] Not connected to BBS. Command not sent.\n")
+            self.term_print("[!] Not connected to BBS or Caller. Command not sent.\n")
 
     def send_node_command(self, cmd):
         self.term_print(f">>> {cmd}\n")
@@ -807,15 +880,12 @@ class VaraBBSClient(tk.Tk):
         else:
             self.term_print("[!] Not connected to Node/BBS. Connect first to run this command.\n")
 
-    # ==========================================
-    # UI ACTIONS & FOLDER LOGIC
-    # ==========================================
     def _update_folder_counts(self):
-        self.folder_tree.item(self.f_inbox, text=f"📥 Inbox ({len(self.inbox_msgs)})")
-        self.folder_tree.item(self.f_drafts, text=f"📝 Drafts ({len(self.draft_msgs)})")
-        self.folder_tree.item(self.f_outbox, text=f"📤 Outbox ({len(self.outbox_msgs)})")
-        self.folder_tree.item(self.f_sent, text=f"📁 Sent ({len(self.sent_msgs)})")
-        self.folder_tree.item(self.f_trash, text=f"🗑️ Trash ({len(self.trash_msgs)})")
+        self.folder_tree.item(self.f_inbox, text=f"Inbox ({len(self.inbox_msgs)})")
+        self.folder_tree.item(self.f_drafts, text=f"Drafts ({len(self.draft_msgs)})")
+        self.folder_tree.item(self.f_outbox, text=f"Outbox ({len(self.outbox_msgs)})")
+        self.folder_tree.item(self.f_sent, text=f"Sent ({len(self.sent_msgs)})")
+        self.folder_tree.item(self.f_trash, text=f"Trash ({len(self.trash_msgs)})")
 
     def _get_active_store(self):
         selected = self.folder_tree.selection()
@@ -854,7 +924,7 @@ class VaraBBSClient(tk.Tk):
                 status = msg.get("date", "Sent")
                 from_to = f"{msg.get('type', 'SP')}: {msg.get('to', '')}"
                 num_col = f"S-{i+1}"
-            else:  # trash
+            else:
                 status = "Deleted"
                 from_to = msg.get("from", msg.get("to", ""))
                 num_col = "DEL"
@@ -934,7 +1004,6 @@ class VaraBBSClient(tk.Tk):
         f = ttk.Frame(win, padding=12)
         f.pack(fill=tk.BOTH, expand=True)
 
-        # Message Type Toggle (SP vs SB)
         type_row = ttk.Frame(f)
         type_row.grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=(0, 6))
 
@@ -977,10 +1046,10 @@ class VaraBBSClient(tk.Tk):
                 to_combo.set("")
                 self._save_data()
 
-        btn_add_to = ttk.Button(to_row, text="➕ Add", width=6, command=add_to_history)
+        btn_add_to = ttk.Button(to_row, text="[+] Add", width=8, command=add_to_history)
         btn_add_to.pack(side=tk.LEFT, padx=2)
 
-        btn_del_to = ttk.Button(to_row, text="🗑️ Del", width=6, command=del_from_history)
+        btn_del_to = ttk.Button(to_row, text="[-] Del", width=8, command=del_from_history)
         btn_del_to.pack(side=tk.LEFT, padx=2)
 
         def _on_type_changed(*args):
@@ -1068,9 +1137,8 @@ class VaraBBSClient(tk.Tk):
                 else:
                     spell_menu.add_command(label="(No spelling suggestions)", state=tk.DISABLED)
 
-                # Add to Dictionary action
                 spell_menu.add_command(
-                    label=f"➕ Add '{clicked_word}' to Dictionary",
+                    label=f"[+] Add '{clicked_word}' to Dictionary",
                     command=lambda w=clicked_word: add_word_to_user_dict(w)
                 )
                 spell_menu.add_separator()
@@ -1092,7 +1160,8 @@ class VaraBBSClient(tk.Tk):
             body_text.insert("1.0", pre_body)
         else:
             active_sig = self.sig_text.get("1.0", tk.END).strip()
-            body_text.insert("1.0", f"\n\n{active_sig}")
+            if active_sig:
+                body_text.insert("1.0", f"\n\n{active_sig}")
             body_text.mark_set("insert", "1.0")
 
         self.after(100, run_spell_check)
@@ -1138,16 +1207,23 @@ class VaraBBSClient(tk.Tk):
             self.term_print(f"[*] Queued outbound {m_type} message for {dest} to Outbox.\n")
             win.destroy()
 
-        ttk.Button(btn_row, text="💾 Save as Draft", command=save_draft).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_row, text="Save as Draft", command=save_draft).pack(side=tk.LEFT, padx=4)
         ttk.Button(btn_row, text="Queue to Outbox", command=queue_outbound).pack(side=tk.LEFT, padx=4)
 
     # ==========================================
     # SESSION LAUNCHERS
     # ==========================================
     def _prepare_session(self):
+        if self.mailbox_in_session:
+            messagebox.showwarning("Busy", "A caller is currently connected to your Mailbox.")
+            return None
+
         if self.worker_thread and self.worker_thread.is_alive():
             messagebox.showwarning("Busy", "A connection session is already active.")
             return None
+
+        if self.listener_active:
+            self._stop_listener_service()
 
         target_bbs = self.bbs_combo.get().strip().upper()
         if not target_bbs:
@@ -1167,6 +1243,18 @@ class VaraBBSClient(tk.Tk):
         except ValueError:
             messagebox.showerror("Error", "Command and Data ports must be numbers.")
             return None
+
+        try:
+            dwell_val = float(self.dwell_entry.get().strip())
+            if dwell_val < 0:
+                dwell_val = 1.5
+        except ValueError:
+            dwell_val = 20.0 if mode == "HF" else 1.5
+
+        if mode == "HF":
+            self.hf_dwell = str(dwell_val)
+        else:
+            self.fm_dwell = str(dwell_val)
 
         active_contacts = self._get_active_contacts()
         updated = False
@@ -1189,8 +1277,9 @@ class VaraBBSClient(tk.Tk):
         self.btn_send_rcv.config(state=tk.DISABLED)
         self.btn_manual_conn.config(state=tk.DISABLED)
         self.btn_disconnect.config(state=tk.NORMAL)
+        self.btn_listen.config(state=tk.DISABLED)
 
-        return host, target_bbs, raw_digi, bw, cmd_port, data_port, my_call, signature, mode
+        return host, target_bbs, raw_digi, bw, cmd_port, data_port, my_call, signature, mode, dwell_val
 
     def start_auto_session(self):
         params = self._prepare_session()
@@ -1203,11 +1292,12 @@ class VaraBBSClient(tk.Tk):
         params = self._prepare_session()
         if not params:
             return
-        self.worker_thread = threading.Thread(target=self._run_manual_session, args=params, daemon=True)
+        # Omit dwell_val for interactive terminal sessions
+        self.worker_thread = threading.Thread(target=self._run_manual_session, args=params[:-1], daemon=True)
         self.worker_thread.start()
 
     # ==========================================
-    # VARA HF / FM NETWORKING ENGINE
+    # VARA HF / FM OUTBOUND NETWORKING ENGINE
     # ==========================================
     def _connect_rf(self, host, target_bbs, raw_digi, bw, cmd_port, data_port, my_call):
         self.update_status(f"Connecting to VARA ({host})...", "orange")
@@ -1268,9 +1358,6 @@ class VaraBBSClient(tk.Tk):
         self.term_print(f"[+] RF Link established with {target_bbs}!\n\n")
         return True
 
-    # ----------------------------------------------------
-    # MULTI-MESSAGE EXTRACTION & INBOX REFRESH HELPER
-    # ----------------------------------------------------
     def _create_inbox_messages_from_rm(self, raw_text):
         clean_text = raw_text.replace("\r\n", "\n").replace("\r", "\n")
         clean_text = re.sub(r'\n[^\n]*[>?]\s*$', '', clean_text).strip()
@@ -1320,15 +1407,12 @@ class VaraBBSClient(tk.Tk):
 
         return created_count
 
-    # ----------------------------------------------------
-    # MODE 1: AUTOMATED SEND/RECEIVE EXCHANGE (RM ONLY + GATED OUTBOX)
-    # ----------------------------------------------------
-    def _run_auto_session(self, host, target_bbs, raw_digi, bw, cmd_port, data_port, my_call, signature, mode):
+    def _run_auto_session(self, host, target_bbs, raw_digi, bw, cmd_port, data_port, my_call, signature, mode, dwell_val):
         try:
             if not self._connect_rf(host, target_bbs, raw_digi, bw, cmd_port, data_port, my_call):
                 return
 
-            self._handle_auto_bbs_exchange(signature, mode)
+            self._handle_auto_bbs_exchange(signature, mode, dwell_val)
 
             if not self.abort_requested:
                 self.update_status("Disconnecting...", "orange")
@@ -1346,7 +1430,7 @@ class VaraBBSClient(tk.Tk):
             self._disconnect_vara()
             self._reset_ui_buttons()
 
-    def _handle_auto_bbs_exchange(self, signature, mode):
+    def _handle_auto_bbs_exchange(self, signature, mode, dwell_val):
         initial_timeout = 40.0 if mode == "HF" else 15.0
         banner = self._recv_data_until_prompt(timeout=initial_timeout, quiet_delay=1.5)
         if self.abort_requested:
@@ -1360,12 +1444,13 @@ class VaraBBSClient(tk.Tk):
             if self.abort_requested:
                 return
 
-        wait_seconds = 40.0 if mode == "HF" else 1.2
+        # Dwell before initial RM query
+        self.term_print(f"[*] Dwell delay ({dwell_val}s) before command dispatch...\n")
         start_wait = time.time()
-        while time.time() - start_wait < wait_seconds:
+        while time.time() - start_wait < dwell_val:
             if self.abort_requested:
                 return
-            time.sleep(0.2)
+            time.sleep(0.1)
 
         self.term_print(">>> RM\n")
         self._send_data("RM\r")
@@ -1380,16 +1465,16 @@ class VaraBBSClient(tk.Tk):
         else:
             self.term_print("[*] No unread messages returned by RM.\n")
 
-        outbox_wait = 40.0 if mode == "HF" else 1.2
+        # Step through queued outbox items using dwell timing between commands
         while self.outbox_msgs and not self.abort_requested:
             msg = self.outbox_msgs.pop(0)
             cmd_prefix = msg.get("type", "SP").upper()
 
             start_w = time.time()
-            while time.time() - start_w < outbox_wait:
+            while time.time() - start_w < dwell_val:
                 if self.abort_requested:
                     break
-                time.sleep(0.2)
+                time.sleep(0.1)
 
             self.term_print(f">>> {cmd_prefix} {msg['to']}\n")
             self._send_data(f"{cmd_prefix} {msg['to']}\r")
@@ -1399,10 +1484,10 @@ class VaraBBSClient(tk.Tk):
                 break
 
             start_w = time.time()
-            while time.time() - start_w < outbox_wait:
+            while time.time() - start_w < dwell_val:
                 if self.abort_requested:
                     break
-                time.sleep(0.2)
+                time.sleep(0.1)
 
             self.term_print(f">>> {msg['subj']}\n")
             self._send_data(f"{msg['subj']}\r")
@@ -1412,15 +1497,16 @@ class VaraBBSClient(tk.Tk):
                 break
 
             start_w = time.time()
-            while time.time() - start_w < outbox_wait:
+            while time.time() - start_w < dwell_val:
                 if self.abort_requested:
                     break
-                time.sleep(0.2)
+                time.sleep(0.1)
 
             body_content = msg['body'].strip()
-            sig_check = signature.splitlines()[0] if signature else ""
-            if sig_check and sig_check not in body_content:
-                body_content = f"{body_content}\n\n{signature}"
+            if signature:
+                sig_check = signature.splitlines()[0]
+                if sig_check and sig_check not in body_content:
+                    body_content = f"{body_content}\n\n{signature}"
 
             clean_body = body_content.replace("\r\n", "\r").replace("\n", "\r")
             payload = f"{clean_body}\r/EX\r"
@@ -1438,9 +1524,6 @@ class VaraBBSClient(tk.Tk):
         self.after(0, self._update_folder_counts)
         self.after(0, lambda: self._on_folder_select(None))
 
-    # ----------------------------------------------------
-    # MODE 2: INTERACTIVE TERMINAL LOOP (MANUAL CLI)
-    # ----------------------------------------------------
     def _run_manual_session(self, host, target_bbs, raw_digi, bw, cmd_port, data_port, my_call, signature, mode):
         try:
             if not self._connect_rf(host, target_bbs, raw_digi, bw, cmd_port, data_port, my_call):
@@ -1495,6 +1578,348 @@ class VaraBBSClient(tk.Tk):
             self._disconnect_vara()
             self._reset_ui_buttons()
 
+    # ==========================================
+    # INCOMING MAILBOX & LISTENER ENGINE
+    # ==========================================
+    def toggle_mailbox_listener(self):
+        if self.listener_active:
+            self._stop_listener_service()
+            self.btn_listen.config(text="Mailbox Standby")
+            self.update_status("Standby Disabled", "gray")
+            self.term_print("[*] Mailbox listener disabled.\n")
+        else:
+            if self.worker_thread and self.worker_thread.is_alive():
+                messagebox.showwarning("Busy", "Cannot enable Standby while an outbound session is running.")
+                return
+            self._start_listener_service()
+
+    def _start_listener_service(self):
+        self.listener_stop_event.clear()
+        self.listener_thread = threading.Thread(target=self._run_mailbox_listener, daemon=True)
+        self.listener_thread.start()
+        self.listener_active = True
+        self.btn_listen.config(text="Stop Standby")
+
+    def _stop_listener_service(self):
+        self.listener_active = False
+        self.listener_stop_event.set()
+        try:
+            if self.listener_cmd_sock:
+                self.listener_cmd_sock.sendall(b"LISTEN OFF\rDISCONNECT\r")
+                time.sleep(0.1)
+                self.listener_cmd_sock.close()
+            if self.listener_data_sock:
+                self.listener_data_sock.close()
+        except Exception:
+            pass
+        self.listener_cmd_sock = None
+        self.listener_data_sock = None
+        self.mailbox_in_session = False
+        self.btn_listen.config(text="Mailbox Standby")
+
+    def _run_mailbox_listener(self):
+        host = self.vara_host_entry.get().strip()
+        my_call = self.my_call_entry.get().strip().upper()
+        mode = self.mode_combo.get().strip().upper()
+        bw = self.bw_combo.get().strip()
+        try:
+            cmd_port = int(self.cmd_port_entry.get().strip())
+            data_port = int(self.data_port_entry.get().strip())
+        except ValueError:
+            return
+
+        self.update_status("Standby (Listening)", "green")
+        self.term_print(f"[*] Starting Mailbox Listener on VARA {mode} ({host}:{cmd_port}) for {my_call}...\n")
+
+        try:
+            self.listener_cmd_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.listener_cmd_sock.settimeout(5.0)
+            self.listener_cmd_sock.connect((host, cmd_port))
+
+            self.listener_data_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.listener_data_sock.settimeout(5.0)
+            self.listener_data_sock.connect((host, data_port))
+
+            self.listener_cmd_sock.sendall(f"MYCALL {my_call}\r".encode("ascii"))
+            time.sleep(0.1)
+            self.listener_cmd_sock.sendall(f"{bw}\r".encode("ascii"))
+            time.sleep(0.1)
+            self.listener_cmd_sock.sendall(b"LISTEN ON\r")
+            self.term_print(f"[+] Modem configured. Personal Mailbox standing by for incoming connects...\n")
+        except Exception as e:
+            self.term_print(f"[!] Could not start Mailbox listener: {e}\n")
+            self.after(0, self._stop_listener_service)
+            return
+
+        self.listener_cmd_sock.settimeout(0.3)
+        self.listener_data_sock.settimeout(0.3)
+
+        cmd_buf = ""
+        while not self.listener_stop_event.is_set():
+            try:
+                cmd_data = self.listener_cmd_sock.recv(1024).decode("latin-1", errors="ignore")
+                if cmd_data:
+                    cmd_buf += cmd_data
+                    while "\r" in cmd_buf:
+                        line, cmd_buf = cmd_buf.split("\r", 1)
+                        line = line.strip()
+                        if line.startswith("CONNECTED"):
+                            parts = line.split()
+                            self.remote_call = parts[1].upper() if len(parts) > 1 else "CALLER"
+                            self.mailbox_in_session = True
+                            self.update_status(f"Caller: {self.remote_call}", "blue")
+                            self.term_print(f"\n[+] Incoming RF Connect from {self.remote_call}!\n")
+                            self._send_mailbox_welcome(my_call, mode)
+                        elif line.startswith("DISCONNECTED"):
+                            if self.mailbox_in_session:
+                                self.term_print(f"\n[*] {self.remote_call} disconnected from Mailbox.\n")
+                                self.mailbox_in_session = False
+                                self.remote_call = ""
+                                self.mb_state = "CMD"
+                                self.update_status("Standby (Listening)", "green")
+            except socket.timeout:
+                pass
+            except Exception:
+                break
+
+            if self.mailbox_in_session:
+                try:
+                    data_in = self.listener_data_sock.recv(2048).decode("latin-1", errors="ignore")
+                    if data_in:
+                        self.term_print(f"[{self.remote_call}] " + data_in)
+                        self._process_mailbox_input(data_in, my_call)
+                except socket.timeout:
+                    pass
+                except Exception:
+                    break
+
+        self.after(0, self._stop_listener_service)
+
+    def _send_listener_data(self, txt):
+        if self.listener_data_sock:
+            try:
+                self.listener_data_sock.sendall(txt.encode("latin-1"))
+            except Exception:
+                pass
+
+    def _send_mailbox_welcome(self, my_call, mode):
+        self.mb_state = "CMD"
+        self.mb_line_buffer = ""
+        
+        caller_base = self.remote_call.split('-')[0].upper()
+        matching_mail = [
+            m for m in self.inbox_msgs 
+            if str(m.get("to", "")).strip().upper() in (self.remote_call, caller_base)
+        ]
+        
+        if matching_mail:
+            mail_alert = (
+                f"\r\n*** YOU HAVE {len(matching_mail)} MESSAGE(S) WAITING IN THIS MAILBOX ***\r\n"
+                f"Type LM to list your messages or R <num> to read.\r\n"
+            )
+        else:
+            mail_alert = "\r\nNo personal mail waiting for you.\r\n"
+
+        welcome = (
+            f"\r\nWelcome to {my_call} Personal Mailbox [VARA {mode}]\r\n"
+            f"Current Station Time: {time.strftime('%Y-%m-%d %H:%M:%S')}\r\n"
+            f"{mail_alert}\r\n"
+            f"Type ? or H for help.\r\n\r\n"
+            f"{my_call} Mailbox > "
+        )
+        self._send_listener_data(welcome)
+
+    def _process_mailbox_input(self, raw_data, my_call):
+        self.mb_line_buffer += raw_data.replace("\n", "\r")
+        while "\r" in self.mb_line_buffer:
+            line, self.mb_line_buffer = self.mb_line_buffer.split("\r", 1)
+            line = line.strip()
+            if not line and self.mb_state == "CMD":
+                self._send_listener_data(f"{my_call} Mailbox > ")
+                continue
+            self._handle_mailbox_line(line, my_call)
+
+    def _handle_mailbox_line(self, line, my_call):
+        prompt = f"{my_call} Mailbox > "
+
+        # STATE: Normal Command Prompt
+        if self.mb_state == "CMD":
+            cmd = line.upper()
+            
+            # Help
+            if cmd in ("?", "H", "HELP"):
+                help_text = (
+                    "\r\n--- Mailbox Commands ---\r\n"
+                    "L           - List all messages\r\n"
+                    "LM          - List messages addressed to you\r\n"
+                    "R <num>     - Read message by number\r\n"
+                    "SP <call>   - Send a private message\r\n"
+                    "SR <num>    - Send reply to a specific message\r\n"
+                    "KM <num>    - Kill/delete your message\r\n"
+                    "B, BYE, Q   - Disconnect\r\n\r\n"
+                )
+                self._send_listener_data(help_text + prompt)
+
+            # List All (L)
+            elif cmd == "L":
+                resp = "\r\nMsg #   From       To         Date         Subject\r\n"
+                resp += "-" * 55 + "\r\n"
+                if not self.inbox_msgs:
+                    resp += "(No messages in mailbox)\r\n"
+                else:
+                    for i, m in enumerate(self.inbox_msgs):
+                        m_id = str(m.get("id", i + 1)).ljust(7)
+                        m_from = str(m.get("from", "N/A"))[:9].ljust(10)
+                        m_to = str(m.get("to", my_call))[:9].ljust(10)
+                        m_date = str(m.get("date", ""))[:12].ljust(12)
+                        m_subj = str(m.get("subj", "(No Subject)"))[:25]
+                        resp += f"{m_id} {m_from} {m_to} {m_date} {m_subj}\r\n"
+                self._send_listener_data(resp + "\r\n" + prompt)
+
+            # List Mine (LM)
+            elif cmd == "LM":
+                caller_base = self.remote_call.split('-')[0].upper()
+                resp = f"\r\nMessages addressed to {self.remote_call}:\r\n"
+                resp += "Msg #   From       Date         Subject\r\n"
+                resp += "-" * 50 + "\r\n"
+                matched = [
+                    m for m in self.inbox_msgs 
+                    if str(m.get("to", "")).strip().upper() in (self.remote_call, caller_base)
+                ]
+                if not matched:
+                    resp += "(No messages for your callsign)\r\n"
+                else:
+                    for i, m in enumerate(matched):
+                        m_id = str(m.get("id", i + 1)).ljust(7)
+                        m_from = str(m.get("from", "N/A"))[:9].ljust(10)
+                        m_date = str(m.get("date", ""))[:12].ljust(12)
+                        m_subj = str(m.get("subj", "(No Subject)"))[:25]
+                        resp += f"{m_id} {m_from} {m_date} {m_subj}\r\n"
+                self._send_listener_data(resp + "\r\n" + prompt)
+
+            # Read (R <num>)
+            elif cmd.startswith("R ") or (cmd.startswith("R") and len(cmd) > 1 and cmd[1:].isdigit()):
+                num_str = cmd[2:].strip() if cmd.startswith("R ") else cmd[1:].strip()
+                matched = next((m for m in self.inbox_msgs if str(m.get("id")) == num_str), None)
+                if matched:
+                    msg_body = (
+                        f"\r\nMessage #{num_str}\r\n"
+                        f"From:    {matched.get('from', 'N/A')}\r\n"
+                        f"To:      {matched.get('to', my_call)}\r\n"
+                        f"Date:    {matched.get('date', 'N/A')}\r\n"
+                        f"Subject: {matched.get('subj', '')}\r\n"
+                        f"{'-'*45}\r\n"
+                        f"{matched.get('body', '')}\r\n"
+                        f"{'-'*45}\r\n\r\n"
+                    )
+                    self._send_listener_data(msg_body + prompt)
+                else:
+                    self._send_listener_data(f"\r\nMessage #{num_str} not found.\r\n\r\n{prompt}")
+
+            # Send Reply (SR <msg#>)
+            elif cmd.startswith("SR ") or (cmd.startswith("SR") and len(cmd) > 2 and cmd[2:].isdigit()):
+                num_str = cmd[3:].strip() if cmd.startswith("SR ") else cmd[2:].strip()
+                matched = next((m for m in self.inbox_msgs if str(m.get("id")) == num_str), None)
+                if matched:
+                    orig_from = matched.get("from", "").strip().upper()
+                    dest_call = orig_from if orig_from and orig_from != "BBS" else my_call
+                    orig_subj = matched.get("subj", "").strip()
+                    reply_subj = orig_subj if orig_subj.upper().startswith("RE:") else f"RE: {orig_subj}"
+                    
+                    self.mb_rx_msg = {
+                        "from": self.remote_call,
+                        "to": dest_call,
+                        "subj": reply_subj,
+                        "body": "",
+                        "type": "SP"
+                    }
+                    self.mb_state = "SP_BODY"
+                    self._send_listener_data(
+                        f"\r\nReplying to Message #{num_str} (To: {dest_call})\r\n"
+                        f"Subject: {reply_subj}\r\n"
+                        f"Enter message text. End with /EX or Ctrl+Z on a new line:\r\n"
+                    )
+                else:
+                    self._send_listener_data(f"\r\nMessage #{num_str} not found.\r\n\r\n{prompt}")
+
+            # Send Personal Message (SP <call>)
+            elif cmd.startswith("SP ") or cmd.startswith("SB "):
+                dest_call = cmd.split(maxsplit=1)[1].strip().upper()
+                if not dest_call:
+                    self._send_listener_data(f"\r\nError: Destination callsign required.\r\n{prompt}")
+                    return
+                self.mb_rx_msg = {
+                    "from": self.remote_call,
+                    "to": dest_call,
+                    "subj": "",
+                    "body": "",
+                    "type": "SP" if cmd.startswith("SP") else "SB"
+                }
+                self.mb_state = "SP_SUBJ"
+                self._send_listener_data("Enter Subject: ")
+
+            # Kill/Delete Message (KM <num>)
+            elif cmd.startswith("KM ") or (cmd.startswith("KM") and len(cmd) > 2 and cmd[2:].isdigit()):
+                num_str = cmd[3:].strip() if cmd.startswith("KM ") else cmd[2:].strip()
+                matched = next((m for m in self.inbox_msgs if str(m.get("id")) == num_str), None)
+                if matched:
+                    caller_base = self.remote_call.split('-')[0].upper()
+                    m_from = str(matched.get("from", "")).strip().upper()
+                    m_to = str(matched.get("to", "")).strip().upper()
+
+                    if self.remote_call in (m_from, m_to) or caller_base in (m_from, m_to) or my_call in (m_from, m_to):
+                        self.inbox_msgs.remove(matched)
+                        self.trash_msgs.append(matched)
+                        self._save_data()
+                        self.after(0, self._update_folder_counts)
+                        self.after(0, lambda: self._on_folder_select(None))
+                        self._send_listener_data(f"\r\nMessage #{num_str} killed.\r\n\r\n{prompt}")
+                    else:
+                        self._send_listener_data(f"\r\nAccess Denied: Not addressed to or sent by {self.remote_call}.\r\n\r\n{prompt}")
+                else:
+                    self._send_listener_data(f"\r\nMessage #{num_str} not found.\r\n\r\n{prompt}")
+
+            # Disconnect / Logoff
+            elif cmd in ("B", "BYE", "Q", "QUIT"):
+                self._send_listener_data(f"\r\n73 de {my_call}. Disconnecting link...\r\n")
+                time.sleep(1.0)
+                try:
+                    if self.listener_cmd_sock:
+                        self.listener_cmd_sock.sendall(b"DISCONNECT\r")
+                except Exception:
+                    pass
+
+            else:
+                self._send_listener_data(f"\r\nUnknown command '{line}'. Type H or ? for help.\r\n\r\n{prompt}")
+
+        # STATE: Awaiting Subject
+        elif self.mb_state == "SP_SUBJ":
+            self.mb_rx_msg["subj"] = line if line else "No Subject"
+            self.mb_state = "SP_BODY"
+            self._send_listener_data("\r\nEnter message text. End with /EX or Ctrl+Z on a new line:\r\n")
+
+        # STATE: Collecting Body Lines until /EX
+        elif self.mb_state == "SP_BODY":
+            if line.upper() in ("/EX", "\x1a", "EX"):
+                next_id = str(len(self.inbox_msgs) + 1)
+                self.mb_rx_msg["id"] = next_id
+                self.mb_rx_msg["date"] = time.strftime("%m/%d %H:%M")
+                self.inbox_msgs.append(dict(self.mb_rx_msg))
+                self._save_data()
+                
+                self.after(0, self._update_folder_counts)
+                self.after(0, lambda: self._on_folder_select(None))
+
+                self.term_print(f"\n[+] Mailbox saved message #{next_id} from {self.remote_call} to {self.mb_rx_msg['to']}!\n")
+                self._send_listener_data(f"\r\nMessage #{next_id} stored successfully.\r\n\r\n{prompt}")
+                self.mb_state = "CMD"
+                self.mb_rx_msg = {}
+            else:
+                if self.mb_rx_msg["body"]:
+                    self.mb_rx_msg["body"] += "\n" + line
+                else:
+                    self.mb_rx_msg["body"] = line
+
     # ----------------------------------------------------
     # SOCKET & BUFFER UTILITIES
     # ----------------------------------------------------
@@ -1541,7 +1966,7 @@ class VaraBBSClient(tk.Tk):
     def manual_disconnect(self):
         self.abort_requested = True
         self.update_status("Aborting transmission...", "red")
-        self.term_print("\n[!] Disconnect button pressed: Sending ABORT to VARA modem...\n")
+        self.term_print("\n[!] Disconnect button pressed: Terminating RF connection...\n")
         threading.Thread(target=self._force_disconnect, daemon=True).start()
 
     def _force_disconnect(self):
@@ -1579,6 +2004,8 @@ class VaraBBSClient(tk.Tk):
         self.after(0, lambda: self.btn_send_rcv.config(state=tk.NORMAL))
         self.after(0, lambda: self.btn_manual_conn.config(state=tk.NORMAL))
         self.after(0, lambda: self.btn_disconnect.config(state=tk.DISABLED))
+        self.after(0, lambda: self.btn_listen.config(state=tk.NORMAL))
+
 
 if __name__ == "__main__":
     app = VaraBBSClient()
