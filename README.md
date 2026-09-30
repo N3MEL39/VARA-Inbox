@@ -1,4 +1,4 @@
-# VARA HF/FM Mail Client & Personal Mailbox Station
+# VARA HF/FM Mail Client & Personal Mailbox 
 
 A zero-dependency Python and Tkinter mail client and automated host station designed for amateur radio operations over VARA HF and VARA FM software modems.
 
