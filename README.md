@@ -66,12 +66,12 @@ No external third-party Python modules (`pip`) are required.
 
 ## Installation & Setup
 
-1. Place `varabbs_2.py` in your chosen working directory.
+1. Place `varabbs.py` in your chosen working directory.
 
 
 2. Start the application:
 ```bash
-python3 varabbs_2.py
+python varabbs.py
 
 ```
 
