@@ -12,82 +12,6 @@ from tkinter import ttk, messagebox, scrolledtext
 
 DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "varabbs_data.json")
 
-# ==========================================
-# ZERO-DEPENDENCY SPELL CHECKER WITH USER DICTIONARY
-# ==========================================
-class SimpleSpellEngine:
-    def __init__(self, user_words=None):
-        self.words = set()
-        self.user_words = set(w.lower() for w in (user_words or []))
-        
-        core_vocab = (
-            "the of and a to in is you that it he was for on are as with his they I "
-            "at be this have from or one had by word but not what all were we when "
-            "your can said there use an each which she do how their if will up other "
-            "about out many then them these so some her would make like him into time "
-            "has look two more write go see number no way could people my than first "
-            "water been call who oil its now find long down day did get come made may "
-            "part over new sound take only little work know place year live me back give "
-            "most very after thing our just name good sentence man think say great where "
-            "help through much before line right too mean old any same tell boy follow "
-            "came want show also around form three small set put end does another well "
-            "large must big even such because turn here why ask went men read need land "
-            "different home us move try kind hand picture again change off play spell air "
-            "away animal house point page letter mother answer found study still learn "
-            "should America world high every near add food between own below country plant "
-            "last school father keep tree never start city earth eye light thought head under "
-            "story saw left few along while might close something seem next hard open example "
-            "begin life always those both paper together got group often run important until "
-            "children side feet car mile night walk white sea began grow took river four carry "
-            "state once book hear stop without second late miss idea enough eat face watch "
-            "far real almost let above girl sometimes mountain cut young talk soon list song "
-            "being leave family radio packet station antenna net traffic emergency weather "
-            "message subject report checks check roster chief volunteer county status sitrep "
-            "bulletin radiogram digipeater modem tactical rig frequencies"
-        )
-        for w in core_vocab.split():
-            self.words.add(w.lower())
-
-        for path in ["/usr/share/dict/words", "/usr/dict/words"]:
-            if os.path.exists(path):
-                try:
-                    with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                        for line in f:
-                            w = line.strip().lower()
-                            if w.isalpha():
-                                self.words.add(w)
-                    break
-                except Exception:
-                    pass
-
-    def add_word(self, word):
-        w = word.strip().lower()
-        if w:
-            self.user_words.add(w)
-            self.words.add(w)
-
-    def is_correct(self, word):
-        w = word.strip().lower()
-        if not w or len(w) <= 1 or w.isdigit():
-            return True
-        if re.match(r'^[A-Z0-9]{1,3}\d[A-Z0-9]{1,4}(?:-\d{1,2})?$', word.upper()):
-            return True
-        if re.match(r'^[A-R]{2}\d{2}[A-X]{2}$', word.upper()):
-            return True
-        return (w in self.words) or (w in self.user_words)
-
-    def suggest(self, word):
-        w = word.lower()
-        all_vocab = self.words.union(self.user_words)
-        candidates = []
-        for known in all_vocab:
-            if abs(len(known) - len(w)) <= 1 and (known.startswith(w[:2]) if len(w) > 2 else True):
-                diff = sum(1 for a, b in zip(w, known) if a != b) + abs(len(w) - len(known))
-                if diff <= 2:
-                    candidates.append((diff, known))
-        candidates.sort(key=lambda x: x[0])
-        return [c[1] for c in candidates[:4]]
-
 
 class VaraBBSClient(tk.Tk):
     def __init__(self):
@@ -105,12 +29,12 @@ class VaraBBSClient(tk.Tk):
         self.default_fm_dwell = "1.5"
         
         self.default_hf_contacts = [
-            {"bbs": "N3MEL-2", "digi": ""},
-            {"bbs": "N3MEL-7", "digi": ""}
+            {"bbs": "N3MEL-2", "digi": "", "dwell": "20.0"},
+            {"bbs": "N3MEL-7", "digi": "", "dwell": "20.0"}
         ]
         self.default_fm_contacts = [
-            {"bbs": "N3MEL-2", "digi": ""},
-            {"bbs": "N3MEL-7", "digi": ""}
+            {"bbs": "N3MEL-2", "digi": "", "dwell": "1.5"},
+            {"bbs": "N3MEL-7", "digi": "", "dwell": "1.5"}
         ]
 
         self.default_recipients = [
@@ -146,14 +70,13 @@ class VaraBBSClient(tk.Tk):
         self.listener_stop_event = threading.Event()
         self.mailbox_in_session = False
         self.remote_call = ""
-        self.mb_state = "CMD"  # "CMD", "SP_SUBJ", "SP_BODY"
+        self.mb_state = "CMD"
         self.mb_rx_msg = {}
         self.mb_line_buffer = ""
 
         # Load Persistent Storage
         self.saved_geometry = "1280x840"
         self.theme_mode = "light"
-        self.user_dictionary = []
         self.hf_contacts = []
         self.fm_contacts = []
         self.recent_recipients = []
@@ -164,10 +87,8 @@ class VaraBBSClient(tk.Tk):
         self.trash_msgs = []
         self._load_data()
 
-        self.spell = SimpleSpellEngine(user_words=self.user_dictionary)
-
         # Window Setup
-        self.title(f"VARA HF/FM Mail & Terminal Client by N3MEL - [{self.current_call}]")
+        self.title(f"VARA HF/FM Mail & Terminal Client by N3MEL 2.5 - [{self.current_call}]")
         self.geometry(self.saved_geometry)
         self.after(50, self._maximize_window)
 
@@ -201,7 +122,6 @@ class VaraBBSClient(tk.Tk):
                     self.saved_geometry = store.get("window_geometry", "1280x840")
                     self.theme_mode = store.get("theme_mode", "light")
                     self.recent_recipients = store.get("recent_recipients", list(self.default_recipients))
-                    self.user_dictionary = store.get("user_dictionary", [])
 
                     self.current_call = store.get("my_call", self.default_call)
                     self.current_host = store.get("modem_host", self.default_host)
@@ -236,13 +156,21 @@ class VaraBBSClient(tk.Tk):
                         raw_hf = [{"bbs": b, "digi": ""} for b in store["bbs_list"]]
 
                     self.hf_contacts = [
-                        {"bbs": c["bbs"].strip().upper(), "digi": c.get("digi", "").strip().upper()}
+                        {
+                            "bbs": c["bbs"].strip().upper(),
+                            "digi": c.get("digi", "").strip().upper(),
+                            "dwell": str(c.get("dwell", self.hf_dwell)).strip()
+                        }
                         for c in raw_hf if isinstance(c, dict)
                     ] if raw_hf else list(self.default_hf_contacts)
 
                     raw_fm = store.get("fm_contacts", [])
                     self.fm_contacts = [
-                        {"bbs": c["bbs"].strip().upper(), "digi": c.get("digi", "").strip().upper()}
+                        {
+                            "bbs": c["bbs"].strip().upper(),
+                            "digi": c.get("digi", "").strip().upper(),
+                            "dwell": str(c.get("dwell", self.fm_dwell)).strip()
+                        }
                         for c in raw_fm if isinstance(c, dict)
                     ] if raw_fm else list(self.default_fm_contacts)
 
@@ -268,7 +196,6 @@ class VaraBBSClient(tk.Tk):
         self.hf_contacts = list(self.default_hf_contacts)
         self.fm_contacts = list(self.default_fm_contacts)
         self.recent_recipients = list(self.default_recipients)
-        self.user_dictionary = []
 
     def _save_data(self):
         try:
@@ -276,7 +203,7 @@ class VaraBBSClient(tk.Tk):
         except Exception:
             pass
 
-        # Update cache for current mode's dwell time from GUI entry if initialized
+        # Update cache for current mode's dwell time and station record
         if hasattr(self, "dwell_entry") and hasattr(self, "mode_combo"):
             current_ui_mode = self.mode_combo.get().strip().upper()
             dwell_val = self.dwell_entry.get().strip()
@@ -284,6 +211,14 @@ class VaraBBSClient(tk.Tk):
                 self.hf_dwell = dwell_val
             else:
                 self.fm_dwell = dwell_val
+
+            target_bbs = self.bbs_combo.get().strip().upper() if hasattr(self, "bbs_combo") else ""
+            if target_bbs:
+                contacts = self._get_active_contacts()
+                for c in contacts:
+                    if c["bbs"] == target_bbs:
+                        c["dwell"] = dwell_val
+                        break
 
         data = {
             "window_geometry": self.saved_geometry,
@@ -298,7 +233,6 @@ class VaraBBSClient(tk.Tk):
             "hf_dwell": self.hf_dwell,
             "fm_dwell": self.fm_dwell,
             "recent_recipients": self.recent_recipients,
-            "user_dictionary": self.user_dictionary,
             "hf_contacts": self.hf_contacts,
             "fm_contacts": self.fm_contacts,
             "inbox": self.inbox_msgs,
@@ -742,13 +676,21 @@ class VaraBBSClient(tk.Tk):
         bbs_names = [c["bbs"] for c in active_contacts]
         self.bbs_combo["values"] = bbs_names
 
+        default_dwell = self.hf_dwell if self.current_mode == "HF" else self.fm_dwell
+
         if bbs_names:
-            self.bbs_combo.set(bbs_names[0])
+            first_c = active_contacts[0]
+            self.bbs_combo.set(first_c["bbs"])
             self.digi_entry.delete(0, tk.END)
-            self.digi_entry.insert(0, active_contacts[0].get("digi", ""))
+            self.digi_entry.insert(0, first_c.get("digi", ""))
+            
+            self.dwell_entry.delete(0, tk.END)
+            self.dwell_entry.insert(0, str(first_c.get("dwell", default_dwell)))
         else:
             self.bbs_combo.set("")
             self.digi_entry.delete(0, tk.END)
+            self.dwell_entry.delete(0, tk.END)
+            self.dwell_entry.insert(0, default_dwell)
 
     def _on_mode_change(self, event=None):
         new_mode = self.mode_combo.get().strip().upper()
@@ -776,7 +718,7 @@ class VaraBBSClient(tk.Tk):
             self.dwell_entry.insert(0, self.hf_dwell)
             self.bw_combo.config(values=["BW500", "BW2300", "BW2750"])
             self.bw_combo.set("BW500")
-            self.term_print(f"[*] Switched to VARA HF (Ports 8358/8359, BW500, Dwell: {self.hf_dwell}s).\n")
+            self.term_print(f"[*] Switched to VARA HF (Ports 8358/8359, BW500, Default Dwell: {self.hf_dwell}s).\n")
         else:
             self.cmd_port_entry.delete(0, tk.END)
             self.cmd_port_entry.insert(0, "8300")
@@ -786,7 +728,7 @@ class VaraBBSClient(tk.Tk):
             self.dwell_entry.insert(0, self.fm_dwell)
             self.bw_combo.config(values=["NARROW", "WIDE"])
             self.bw_combo.set("NARROW")
-            self.term_print(f"[*] Switched to VARA FM (Ports 8300/8301, NARROW, Dwell: {self.fm_dwell}s).\n")
+            self.term_print(f"[*] Switched to VARA FM (Ports 8300/8301, NARROW, Default Dwell: {self.fm_dwell}s).\n")
 
         self._refresh_bbs_dropdown()
         if restart_listener:
@@ -795,16 +737,24 @@ class VaraBBSClient(tk.Tk):
     def _on_bbs_selected(self, event=None):
         selected_bbs = self.bbs_combo.get().strip().upper()
         active_contacts = self._get_active_contacts()
+        default_dwell = self.hf_dwell if self.current_mode == "HF" else self.fm_dwell
+
         for contact in active_contacts:
             if contact["bbs"] == selected_bbs:
                 self.digi_entry.delete(0, tk.END)
                 self.digi_entry.insert(0, contact.get("digi", ""))
+                
+                # Load the station's saved dwell into the UI entry
+                station_dwell = str(contact.get("dwell", default_dwell))
+                self.dwell_entry.delete(0, tk.END)
+                self.dwell_entry.insert(0, station_dwell)
                 break
 
     def add_bbs_station(self):
         new_bbs = self.bbs_combo.get().strip().upper()
         digi = self.digi_entry.get().strip().upper()
         mode = self.mode_combo.get()
+        dwell_str = self.dwell_entry.get().strip()
 
         if not new_bbs:
             messagebox.showwarning("Warning", "Enter a callsign in the Target BBS box to add.")
@@ -815,18 +765,19 @@ class VaraBBSClient(tk.Tk):
         for contact in active_contacts:
             if contact["bbs"] == new_bbs:
                 contact["digi"] = digi
+                contact["dwell"] = dwell_str
                 updated = True
                 break
 
         if not updated:
-            active_contacts.append({"bbs": new_bbs, "digi": digi})
+            active_contacts.append({"bbs": new_bbs, "digi": digi, "dwell": dwell_str})
 
         self.bbs_combo["values"] = [c["bbs"] for c in active_contacts]
         self.bbs_combo.set(new_bbs)
         self._save_data()
 
         digi_info = f" via {digi}" if digi else ""
-        self.term_print(f"[*] Saved {new_bbs}{digi_info} to {mode} contacts list.\n")
+        self.term_print(f"[*] Saved {new_bbs}{digi_info} (Dwell: {dwell_str}s) to {mode} contacts list.\n")
 
     def delete_bbs_station(self):
         selected_bbs = self.bbs_combo.get().strip().upper()
@@ -987,7 +938,7 @@ class VaraBBSClient(tk.Tk):
         self.status_lbl.config(text=text, foreground=color)
 
     # ==========================================
-    # COMPOSER WITH SPELLCHECK & USER DICTIONARY
+    # COMPOSER
     # ==========================================
     def open_composer(self, pre_to="", pre_subj="", pre_body=None, pre_type="SP"):
         win = tk.Toplevel(self)
@@ -1081,80 +1032,7 @@ class VaraBBSClient(tk.Tk):
         body_text.grid(row=3, column=1, sticky=tk.NSEW, pady=4)
         f.grid_rowconfigure(3, weight=1)
         f.grid_columnconfigure(1, weight=1)
-
-        err_bg = "#7f1d1d" if is_dark else "#fecaca"
-        err_fg = "#fca5a5" if is_dark else "#991b1b"
-        body_text.tag_configure("misspelled", background=err_bg, foreground=err_fg)
-
-        spell_menu = tk.Menu(win, tearoff=0)
-
-        def run_spell_check(event=None):
-            body_text.tag_remove("misspelled", "1.0", "end")
-            lines = body_text.get("1.0", "end-1c").split("\n")
-            for line_no, line in enumerate(lines, start=1):
-                for match in re.finditer(r"\b[A-Za-z']+\b", line):
-                    word = match.group()
-                    if not self.spell.is_correct(word):
-                        start_idx = f"{line_no}.{match.start()}"
-                        end_idx = f"{line_no}.{match.end()}"
-                        body_text.tag_add("misspelled", start_idx, end_idx)
-
-        def replace_word(w_start, w_end, replacement):
-            body_text.delete(w_start, w_end)
-            body_text.insert(w_start, replacement)
-            run_spell_check()
-
-        def add_word_to_user_dict(word):
-            clean_w = word.strip().lower()
-            if clean_w and clean_w not in self.user_dictionary:
-                self.user_dictionary.append(clean_w)
-                self.spell.add_word(clean_w)
-                self._save_data()
-            run_spell_check()
-
-        def show_body_context_menu(event):
-            is_d = (self.theme_mode == "dark")
-            m_bg = "#282c34" if is_d else "#ffffff"
-            m_fg = "#e5e7eb" if is_d else "#111827"
-            spell_menu.delete(0, tk.END)
-
-            click_idx = body_text.index(f"@{event.x},{event.y}")
-            tags = body_text.tag_names(click_idx)
-
-            if "misspelled" in tags:
-                w_start = body_text.index(f"{click_idx} wordstart")
-                w_end = body_text.index(f"{click_idx} wordend")
-                clicked_word = body_text.get(w_start, w_end).strip()
-
-                candidates = self.spell.suggest(clicked_word)
-                if candidates:
-                    for cand in candidates:
-                        spell_menu.add_command(
-                            label=f"Suggested: {cand}",
-                            font=("Arial", 9, "bold"),
-                            command=lambda s=w_start, e=w_end, r=cand: replace_word(s, e, r)
-                        )
-                else:
-                    spell_menu.add_command(label="(No spelling suggestions)", state=tk.DISABLED)
-
-                spell_menu.add_command(
-                    label=f"[+] Add '{clicked_word}' to Dictionary",
-                    command=lambda w=clicked_word: add_word_to_user_dict(w)
-                )
-                spell_menu.add_separator()
-
-            spell_menu.add_command(label="Cut", command=lambda: body_text.event_generate("<<Cut>>"))
-            spell_menu.add_command(label="Copy", command=lambda: body_text.event_generate("<<Copy>>"))
-            spell_menu.add_command(label="Paste", command=lambda: body_text.event_generate("<<Paste>>"))
-            spell_menu.add_separator()
-            spell_menu.add_command(label="Select All", command=lambda: self._select_all_widget(body_text))
-
-            spell_menu.config(bg=m_bg, fg=m_fg, activebackground="#2563eb", activeforeground="#ffffff")
-            spell_menu.tk_popup(event.x_root, event.y_root)
-
-        body_text.bind("<KeyRelease>", run_spell_check)
-        body_text.bind("<Button-3>", show_body_context_menu)
-        body_text.bind("<Button-2>", show_body_context_menu)
+        self.attach_context_menu(body_text)
 
         if pre_body is not None:
             body_text.insert("1.0", pre_body)
@@ -1163,8 +1041,6 @@ class VaraBBSClient(tk.Tk):
             if active_sig:
                 body_text.insert("1.0", f"\n\n{active_sig}")
             body_text.mark_set("insert", "1.0")
-
-        self.after(100, run_spell_check)
 
         btn_row = ttk.Frame(f)
         btn_row.grid(row=4, column=1, sticky=tk.E, pady=10)
@@ -1256,15 +1132,17 @@ class VaraBBSClient(tk.Tk):
         else:
             self.fm_dwell = str(dwell_val)
 
+        # Update contact record with current digi and current station-specific dwell
         active_contacts = self._get_active_contacts()
         updated = False
         for contact in active_contacts:
             if contact["bbs"] == target_bbs:
                 contact["digi"] = raw_digi
+                contact["dwell"] = str(dwell_val)
                 updated = True
                 break
         if not updated:
-            active_contacts.append({"bbs": target_bbs, "digi": raw_digi})
+            active_contacts.append({"bbs": target_bbs, "digi": raw_digi, "dwell": str(dwell_val)})
             self.bbs_combo["values"] = [c["bbs"] for c in active_contacts]
 
         self._save_data()
@@ -1444,7 +1322,7 @@ class VaraBBSClient(tk.Tk):
             if self.abort_requested:
                 return
 
-        # Dwell before initial RM query
+        # Dwell before initial RM query using station-specific dwell
         self.term_print(f"[*] Dwell delay ({dwell_val}s) before command dispatch...\n")
         start_wait = time.time()
         while time.time() - start_wait < dwell_val:
