@@ -1,154 +1,148 @@
-# VARA HF/FM Mail & Terminal Client (v2.5)
+# VARA HF/FM Mail & Terminal Client (v3.0)
 
-A standalone, lightweight Python and Tkinter client for VARA HF and VARA FM modems. Provides automated packet message forwarding, an interactive live terminal, personal mailbox hosting, and station management.
-
----
-
-## What's New in Version 2.5
-
-* **Per-Station Dwell Timing**: Save dedicated dwell times on a per-station basis. Stations requiring extended delays due to challenging HF band conditions or path latencies retain their custom values automatically.
-
-
-* **Dynamic Target Sync**: Selecting a BBS from the dropdown immediately populates that station's digipeater path and stored dwell interval.
-
-
-* **Clean Text Composer**: Removed all background spellchecking and dictionary routines for a streamlined, responsive compose window with native text editing and context controls.
-
-
-* **Backward-Compatible Storage**: Seamlessly loads existing `varabbs_data.json` databases, assigning defaults where station-specific dwell times are not yet defined.
-
-
+A lightweight, zero-dependency Python and Tkinter workstation client for VARA HF and VARA FM modems. Designed for packet radio operators, hub stations, and emergency communications nets, this application combines automated store-and-forward message routing, an interactive type-ahead terminal, an integrated personal mailbox (PBBS), and per-station RF dwell tuning.
 
 ---
 
-## Core Capabilities
+## What's New in Version 3.0
 
-* **Dual-Mode VARA Support**: Pre-configured port selections and bandwidth defaults for VARA HF (ports 8358/8359, BW500) and VARA FM (ports 8300/8301, NARROW).
-
-
-* **Automated Send/Recv Engine**: Connects, handles node routing, fetches unread mail using `RM`, and dispatches queued outbox messages using configurable dwell pacing and `/EX` termination.
+* **Direct Local PBBS Messaging ("Deposit to PBBS")**: Create and file messages addressed to other stations directly into your local PBBS storage without routing through an external BBS. Remote operators connecting to your station in Mailbox Standby are immediately notified of pending traffic and can pull it using standard `LM` and `R` commands.
 
 
-* **Interactive Live Terminal**: Full type-ahead terminal session featuring one-click node and BBS commands (`N`, `R`, `L`, `S`, `CHAT`, `BBS`, `LM`, `RM`, `KM`, `B`). Double-click any message number in the terminal log to pull and read the message.
+* **Per-Station RF Dwell Tuning**: Configure and store dedicated turnaround dwell intervals on a per-station basis to accommodate difficult HF propagation, high latency, or rapid FM paths.
 
 
-* **Mailbox Standby Mode**: Operates as a local personal mailbox on the air. Remote callers can connect, read waiting traffic (`LM`/`R`), compose personal messages (`SP`), send replies (`SR`), and disconnect (`B`).
+* **Clean Text Composer Engine**: Removed all background dictionary lookups, spellchecking overhead, and redline tags in favor of a lean, native editing environment with standard copy/paste context menus.
 
 
-* **Full Message Management**: Organize traffic across Inbox, Drafts, Outbox, Sent, and Trash folders with persistent message retention.
+* **Dynamic Target Synchronization**: Switching target stations in the dropdown automatically reloads and populates that station's digipeater routing and specific dwell timings.
 
 
-* **Custom Station Signatures**: Multi-line signature block configured to append automatically to outbound messages.
+* **Streamlined UI Header**: Updated interface title banner to reflect version 3.0 station standards.
+
+---
+
+## Key Features
+
+* **Dual Modem Profiles**: Instant preset switching between VARA HF (ports 8358/8359, BW500/BW2300/BW2750) and VARA FM (ports 8300/8301, NARROW/WIDE).
 
 
-* **Theme Customization**: Integrated Light and Dark mode toggle.
+* **Automated Batch Sessions**: Connects to remote nodes/switches, enters the BBS subsystem, downloads unread messages with `RM`, and dispatches queued Outbox messages using `/EX` termination and configurable turnaround pacing.
+
+
+* **Interactive Live Terminal**: Full duplex type-ahead monitor supporting quick node/BBS commands (`N`, `R`, `L`, `S`, `CHAT`, `BBS`, `LM`, `RM`, `KM`, `B`) and double-click message number extraction.
+
+
+* **Inbound Mailbox Hosting (PBBS Standby)**: Operates your station as an open or personal mailbox. Remote callers can connect via RF, view welcome bulletins, list personal mail (`LM`), read messages (`R <num>`), deposit private messages (`SP`), post bulletins (`SB`), reply to existing traffic (`SR <num>`), or delete their messages (`KM <num>`).
+
+
+* **Folder Management**: Local storage categorized across Inbox, Drafts, Outbox, Sent, and Trash with automated JSON synchronization (`varabbs_data.json`).
+
+
+* **HTML Forms Integration**: Quick access to TPRFN online radiogram and emergency forms suite.
+
+
+* **Light / Dark Themes**: Instant palette toggling tailored for day or night station operation.
 
 
 
 ---
 
-## Prerequisites
+## System Requirements
 
-* Python 3.8 or newer
-
-
-* Tkinter support installed (`python3-tk` on Debian/Ubuntu/Raspberry Pi OS)
+* Python 3.8 or higher
 
 
-* An active instance of VARA HF or VARA FM running locally or over the LAN
+* Tkinter (`python3-tk` on Debian/Ubuntu/Raspberry Pi OS)
+
+
+* VARA HF (v1.4.0+) or VARA FM (v4.3.0+) modem software running locally or accessible across the local network
 
 
 
-No additional external Python packages (`pip`) are required.
+No external third-party Python modules (`pip`) are required.
 
 ---
 
-## Installation & Launch
+## Installation & Setup
 
-1. Save `varabbs_2.py` in your station operations directory.
+1. Place `varabbs_2.py` in your chosen working directory.
 
 
-2. Launch the client:
+2. Start the application:
 ```bash
 python3 varabbs_2.py
 
 ```
 
 
-3. Enter your station callsign in **My Callsign**.
+3. Enter your station callsign in **My Callsign** (e.g., `N3MEL`).
 
 
-4. Set the **Modem Host IP** (default: `127.0.0.1` or the IP of your radio machine).
+4. Set the **Modem Host IP** (default: `127.0.0.1` or the remote host IP running the modem).
 
 
-5. Select **Modem Type** (`HF` or `FM`) to load the proper command/data ports and default dwell times.
-
-
-
----
-
-## Station & Dwell Configuration
-
-1. In the **Target BBS** field, enter or select a callsign.
-
-
-2. Set optional relay paths in the **Via Digi** field (e.g., `DIGI1` or `DIGI1 DIGI2`).
-
-
-3. Enter the desired turnaround delay in **Dwell (s)** (e.g., `20.0` for HF conditions, `1.5` for local FM).
-
-
-4. Click **`[+] Add`** to commit the settings for that station.
-
-
-5. To remove a station, select it from the dropdown and click **`[-] Del`**.
-
-
-
-All station profiles, mailbox items, outbox traffic, and station signatures persist automatically to `varabbs_data.json` upon exit.
-
----
-
-## Operating Procedures
-
-### Outbound Auto Session
-
-1. Compose a message via **New Message** and click **Queue to Outbox**.
-
-
-2. Choose the destination station from **Target BBS**.
-
-
-3. Click **Send/Recv**. The client handles RF linking, switch navigation, message downloads, and queued transmissions sequentially.
-
-
-
-### Live Terminal Session
-
-1. Select the destination station and click **Connect (Term)**.
-
-
-2. Monitor responses live in the terminal window.
-
-
-3. Send interactive commands using the input box or the quick-command buttons on the left.
-
-
-4. Click **Disconnect** to terminate the link cleanly.
-
-
-
-### Mailbox Standby
-
-1. Verify **My Callsign** and modem connectivity.
-
-
-2. Click **Mailbox Standby**. The modem enters listen mode and will automatically service incoming RF connects directed to your station callsign.
+5. Select the **Modem Type** (`HF` or `FM`). The software will automatically configure default command ports, data ports, and default dwell timings.
 
 
 
 ---
 
-## Author & Attribution
+## Operating Instructions
 
-Designed and maintained by Glenn (N3MEL) for amateur radio emergency communications and digital data networking.
+### Depositing Messages for Local Callers (PBBS)
+
+1. Click **New Message**.
+
+
+2. Enter the recipient's callsign in **To Callsign** and fill out the **Subject** and **Body**.
+
+
+3. Click **Deposit to PBBS**. The message is filed directly into your local database.
+
+
+4. Enable **Mailbox Standby** on the top toolbar.
+
+
+5. When the recipient station connects to your station via RF, your station alerts them that unread traffic is waiting. They retrieve it by sending `LM` followed by `R <msg_num>`.
+
+
+
+### Dispatching Outbound Messages to a Remote BBS
+
+1. Click **New Message**.
+
+
+2. Enter the destination callsign/distribution address, subject, and text.
+
+
+3. Click **Queue to Outbox (Remote BBS)**.
+
+
+4. Select the target BBS from the **Target BBS** dropdown.
+
+
+5. Click **Send/Recv**. The client connects to the BBS, pulls new unread mail via `RM`, sends each queued item, and files completed transfers into **Sent**.
+
+
+
+### Managing Station Profiles & Dwell Settings
+
+1. Select or type a station callsign into **Target BBS**.
+
+
+2. Specify digipeater paths in **Via Digi** (e.g., `DIGI1` or `DIGI1 DIGI2`) if routing through repeaters or switches.
+
+
+3. Adjust **Dwell (s)** to provide sufficient transmit/receive turnaround delay (e.g., `20.0` for HF paths with latency or slow relays, `1.5` for direct VHF/UHF FM).
+
+
+4. Click **`[+] Add`** to save or update the profile.
+
+
+
+---
+
+## Data Storage
+
+All runtime data, station dwell tables, message folders, and configuration parameters are automatically saved to `varabbs_data.json` in the application directory upon shutdown.

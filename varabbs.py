@@ -88,7 +88,7 @@ class VaraBBSClient(tk.Tk):
         self._load_data()
 
         # Window Setup
-        self.title(f"VARA HF/FM Mail & Terminal Client by N3MEL 2.5 - [{self.current_call}]")
+        self.title(f"VARA HF/FM Mail & Terminal Client by N3MEL 3.0 - [{self.current_call}]")
         self.geometry(self.saved_geometry)
         self.after(50, self._maximize_window)
 
@@ -1066,6 +1066,39 @@ class VaraBBSClient(tk.Tk):
             self.term_print(f"[*] Saved {m_type} message draft.\n")
             win.destroy()
 
+        def deposit_to_pbbs():
+            dest = to_combo.get().strip().upper()
+            subj = subj_entry.get().strip()
+            body = body_text.get("1.0", tk.END).strip()
+            m_type = msg_type_var.get()
+            if not dest or not subj:
+                messagebox.showerror("Error", "Recipient Callsign and Subject required.", parent=win)
+                return
+
+            _remember_recipient(dest)
+            next_id = str(len(self.inbox_msgs) + 1)
+            my_call = self.my_call_entry.get().strip().upper()
+
+            # Append station signature if defined
+            active_sig = self.sig_text.get("1.0", tk.END).strip()
+            if active_sig and active_sig.splitlines()[0] not in body:
+                body = f"{body}\n\n{active_sig}"
+
+            self.inbox_msgs.append({
+                "id": next_id,
+                "from": my_call,
+                "to": dest,
+                "subj": subj,
+                "date": time.strftime("%m/%d %H:%M"),
+                "body": body,
+                "type": m_type
+            })
+            self._save_data()
+            self._update_folder_counts()
+            self._on_folder_select(None)
+            self.term_print(f"[+] Deposited message #{next_id} for {dest} into local PBBS.\n")
+            win.destroy()
+
         def queue_outbound():
             dest = to_combo.get().strip().upper()
             subj = subj_entry.get().strip()
@@ -1083,8 +1116,9 @@ class VaraBBSClient(tk.Tk):
             self.term_print(f"[*] Queued outbound {m_type} message for {dest} to Outbox.\n")
             win.destroy()
 
-        ttk.Button(btn_row, text="Save as Draft", command=save_draft).pack(side=tk.LEFT, padx=4)
-        ttk.Button(btn_row, text="Queue to Outbox", command=queue_outbound).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_row, text="Save as Draft", command=save_draft).pack(side=tk.LEFT, padx=3)
+        ttk.Button(btn_row, text="Deposit to PBBS", command=deposit_to_pbbs).pack(side=tk.LEFT, padx=3)
+        ttk.Button(btn_row, text="Queue to Outbox (Remote BBS)", command=queue_outbound).pack(side=tk.LEFT, padx=3)
 
     # ==========================================
     # SESSION LAUNCHERS
@@ -1147,7 +1181,7 @@ class VaraBBSClient(tk.Tk):
 
         self._save_data()
 
-        self.title(f"VARA HF/FM Mail & Terminal Client - [{my_call}]")
+        self.title(f"VARA HF/FM Mail & Terminal Client - [{my_call}] 30")
         self.abort_requested = False
         while not self.tx_manual_queue.empty():
             self.tx_manual_queue.get_nowait()
