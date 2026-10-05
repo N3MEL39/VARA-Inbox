@@ -7,9 +7,10 @@ import time
 import re
 import json
 import queue
+import shutil
 import webbrowser
 import tkinter as tk
-from tkinter import ttk, messagebox, scrolledtext
+from tkinter import ttk, messagebox, scrolledtext, filedialog
 
 DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "varabbs_data.json")
 
@@ -31,43 +32,63 @@ POPULAR_RIGS = [
 # =====================================================================
 class HamlibController:
     """Manages CAT frequency, mode, filter passband, PTT, telemetry, and daemon."""
-    def __init__(self, host="127.0.0.1", port=4532, enabled=True):
+    def __init__(self, host="127.0.0.1", port=4532, enabled=True, custom_path=""):
         self.host = host.strip() or "127.0.0.1"
         self.port = int(port)
         self.enabled = enabled
+        self.custom_path = custom_path.strip()
         self.lock = threading.Lock()
         self.last_status = "Standby"
         self.is_connected = False
         self.daemon_proc = None
 
-    def update_config(self, host, port, enabled):
+    def update_config(self, host, port, enabled, custom_path=""):
         with self.lock:
             self.host = host.strip() or "127.0.0.1"
             self.port = int(port)
             self.enabled = enabled
+            self.custom_path = custom_path.strip()
 
     def _find_rigctld_binary(self):
+        # 1. Use user-specified path if present and valid
+        if self.custom_path and os.path.isfile(self.custom_path):
+            return self.custom_path
+
+        # 2. Check system PATH
+        path_which = shutil.which("rigctld.exe" if sys.platform == "win32" else "rigctld")
+        if path_which:
+            return path_which
+
+        # 3. Search standard Windows installation locations
         base_x86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
+        base_x64 = os.environ.get("ProgramFiles", r"C:\Program Files")
+
         candidates = [
             os.path.join(base_x86, "hamlib", "bin", "rigctld.exe"),
             os.path.join(base_x86, "bin", "rigctld.exe"),
+            os.path.join(base_x64, "hamlib", "bin", "rigctld.exe"),
+            os.path.join(base_x64, "bin", "rigctld.exe"),
+            r"C:\hamlib\bin\rigctld.exe",
+            r"C:\WSJT\wsjtx\bin\rigctld.exe",
+            r"C:\WSJT\wsjt-x\bin\rigctld.exe",
+            "/usr/bin/rigctld",
+            "/usr/local/bin/rigctld"
         ]
 
-        if os.path.isdir(base_x86):
-            for entry in os.listdir(base_x86):
-                if entry.lower().startswith("hamlib"):
-                    candidates.append(os.path.join(base_x86, entry, "bin", "rigctld.exe"))
-                    candidates.append(os.path.join(base_x86, entry, "rigctld.exe"))
+        # Scan for versioned hamlib folders in Program Files
+        for base_dir in (base_x86, base_x64):
+            if os.path.isdir(base_dir):
+                try:
+                    for entry in os.listdir(base_dir):
+                        if entry.lower().startswith("hamlib"):
+                            candidates.append(os.path.join(base_dir, entry, "bin", "rigctld.exe"))
+                            candidates.append(os.path.join(base_dir, entry, "rigctld.exe"))
+                except Exception:
+                    pass
 
-        candidates.extend([
-            r"C:\hamlib\bin\rigctld.exe",
-            r"C:\Program Files\hamlib\bin\rigctld.exe",
-            r"C:\WSJT\wsjtx\bin\rigctld.exe"
-        ])
-
-        for path in candidates:
-            if os.path.isfile(path):
-                return path
+        for p in candidates:
+            if os.path.isfile(p):
+                return p
 
         return "rigctld"
 
@@ -311,6 +332,7 @@ class VaraBBSClient(tk.Tk):
         self.default_hamlib_model = "3073"
         self.default_hamlib_comm = "COM3"
         self.default_hamlib_baud = "19200"
+        self.default_hamlib_path = ""
         
         self.default_hf_contacts = [
             {"bbs": "N3MEL-2", "digi": "", "dwell": "20.0"},
@@ -346,6 +368,7 @@ class VaraBBSClient(tk.Tk):
         self.hamlib_model = self.default_hamlib_model
         self.hamlib_comm = self.default_hamlib_comm
         self.hamlib_baud = self.default_hamlib_baud
+        self.hamlib_path = self.default_hamlib_path
 
         self.cmd_sock = None
         self.data_sock = None
@@ -382,10 +405,11 @@ class VaraBBSClient(tk.Tk):
         self.cat = HamlibController(
             host=self.hamlib_host,
             port=self.hamlib_port,
-            enabled=self.hamlib_enabled
+            enabled=self.hamlib_enabled,
+            custom_path=self.hamlib_path
         )
 
-        self.title(f"VARA HF/FM Mail & Terminal Client - [{self.current_call}]")
+        self.title(f"VARA HF/FM Mail & Terminal Client by N3MEL v3.5HL - [{self.current_call}]")
         self.geometry(self.saved_geometry)
         self.after(50, self._maximize_window)
 
@@ -447,6 +471,7 @@ class VaraBBSClient(tk.Tk):
                     self.hamlib_model = str(store.get("hamlib_model", self.default_hamlib_model))
                     self.hamlib_comm = str(store.get("hamlib_comm", self.default_hamlib_comm))
                     self.hamlib_baud = str(store.get("hamlib_baud", self.default_hamlib_baud))
+                    self.hamlib_path = str(store.get("hamlib_path", self.default_hamlib_path))
 
                     raw_hf = store.get("hf_contacts", [])
                     self.hf_contacts = [
@@ -495,6 +520,7 @@ class VaraBBSClient(tk.Tk):
         self.hamlib_model = self.default_hamlib_model
         self.hamlib_comm = self.default_hamlib_comm
         self.hamlib_baud = self.default_hamlib_baud
+        self.hamlib_path = self.default_hamlib_path
 
         self.hf_contacts = list(self.default_hf_contacts)
         self.fm_contacts = list(self.default_fm_contacts)
@@ -529,6 +555,7 @@ class VaraBBSClient(tk.Tk):
             "hamlib_model": self.hamlib_model,
             "hamlib_comm": self.hamlib_comm,
             "hamlib_baud": self.hamlib_baud,
+            "hamlib_path": self.hamlib_path,
             "recent_recipients": self.recent_recipients,
             "hf_contacts": self.hf_contacts,
             "fm_contacts": self.fm_contacts,
@@ -965,7 +992,7 @@ class VaraBBSClient(tk.Tk):
     def open_cat_setup_window(self):
         win = tk.Toplevel(self)
         win.title("Hamlib CAT Setup")
-        win.geometry("500x500")
+        win.geometry("520x560")
         win.resizable(False, False)
 
         is_dark = (self.theme_mode == "dark")
@@ -977,10 +1004,59 @@ class VaraBBSClient(tk.Tk):
 
         enabled_var = tk.BooleanVar(value=self.hamlib_enabled)
         chk_en = ttk.Checkbutton(f, text="Enable Hamlib CAT & PTT Control", variable=enabled_var)
-        chk_en.grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=(0, 10))
+        chk_en.grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=(0, 8))
+
+        path_group = ttk.LabelFrame(f, text="Hamlib (rigctld) Executable Location", padding=8)
+        path_group.grid(row=1, column=0, columnspan=2, sticky=tk.EW, pady=(0, 8))
+
+        path_entry_row = ttk.Frame(path_group)
+        path_entry_row.pack(fill=tk.X, pady=(2, 4))
+
+        path_entry = ttk.Entry(path_entry_row, width=38)
+        path_entry.insert(0, self.hamlib_path)
+        path_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
+        self.attach_context_menu(path_entry)
+
+        def _browse_path():
+            filetypes = [("Executables", "*.exe"), ("All Files", "*.*")] if sys.platform == "win32" else [("All Files", "*")]
+            chosen = filedialog.askopenfilename(
+                parent=win,
+                title="Locate rigctld Binary",
+                filetypes=filetypes
+            )
+            if chosen:
+                path_entry.delete(0, tk.END)
+                path_entry.insert(0, chosen)
+
+        ttk.Button(path_entry_row, text="Browse...", width=9, command=_browse_path).pack(side=tk.LEFT)
+
+        path_btn_row = ttk.Frame(path_group)
+        path_btn_row.pack(fill=tk.X, pady=(2, 0))
+
+        def _auto_detect_path():
+            detected = self.cat._find_rigctld_binary()
+            if detected and os.path.isfile(detected):
+                path_entry.delete(0, tk.END)
+                path_entry.insert(0, detected)
+                messagebox.showinfo("Hamlib Detected", f"Found rigctld at:\n{detected}", parent=win)
+            else:
+                which_cmd = shutil.which("rigctld.exe" if sys.platform == "win32" else "rigctld")
+                if which_cmd and os.path.isfile(which_cmd):
+                    path_entry.delete(0, tk.END)
+                    path_entry.insert(0, which_cmd)
+                    messagebox.showinfo("Hamlib Detected", f"Found rigctld in system PATH:\n{which_cmd}", parent=win)
+                else:
+                    messagebox.showwarning(
+                        "Not Found",
+                        "Could not automatically find rigctld.exe.\n\nPlease verify Hamlib is installed or use 'Browse...' to select rigctld manually.",
+                        parent=win
+                    )
+
+        btn_find = ttk.Button(path_btn_row, text="Auto-Detect Path", command=_auto_detect_path)
+        btn_find.pack(side=tk.LEFT)
 
         hw_group = ttk.LabelFrame(f, text="Hardware Radio & Serial Parameters", padding=8)
-        hw_group.grid(row=1, column=0, columnspan=2, sticky=tk.EW, pady=(0, 10))
+        hw_group.grid(row=2, column=0, columnspan=2, sticky=tk.EW, pady=(0, 8))
 
         ttk.Label(hw_group, text="Transceiver Model:").grid(row=0, column=0, sticky=tk.W, pady=4)
         model_display_values = [f"{name} ({mid})" for name, mid in POPULAR_RIGS]
@@ -1000,7 +1076,7 @@ class VaraBBSClient(tk.Tk):
         baud_combo.grid(row=2, column=1, sticky=tk.W, pady=4)
 
         tcp_group = ttk.LabelFrame(f, text="rigctld Network Socket", padding=8)
-        tcp_group.grid(row=2, column=0, columnspan=2, sticky=tk.EW, pady=(0, 10))
+        tcp_group.grid(row=3, column=0, columnspan=2, sticky=tk.EW, pady=(0, 8))
 
         ttk.Label(tcp_group, text="Host / IP:").grid(row=0, column=0, sticky=tk.W, pady=4)
         host_entry = ttk.Entry(tcp_group, width=18)
@@ -1013,7 +1089,7 @@ class VaraBBSClient(tk.Tk):
         port_entry.grid(row=1, column=1, sticky=tk.W, pady=4)
 
         status_box = ttk.LabelFrame(f, text="Live Diagnostics", padding=8)
-        status_box.grid(row=3, column=0, columnspan=2, sticky=tk.EW, pady=(0, 10))
+        status_box.grid(row=4, column=0, columnspan=2, sticky=tk.EW, pady=(0, 8))
 
         diag_lbl = ttk.Label(status_box, text=f"Status: {self.cat.get_status()}", font=("Consolas", 9, "bold"))
         diag_lbl.pack(anchor=tk.W, pady=2)
@@ -1029,16 +1105,18 @@ class VaraBBSClient(tk.Tk):
         def _test_connect():
             h = host_entry.get().strip() or "127.0.0.1"
             p = port_entry.get().strip() or "4532"
-            self.cat.update_config(h, p, True)
+            p_bin = path_entry.get().strip()
+            self.cat.update_config(h, p, True, custom_path=p_bin)
             st = self.cat.get_status()
             diag_lbl.config(text=f"Status: {st}")
 
         ttk.Button(ctrl_row1, text="Ping Socket", command=_test_connect).pack(side=tk.LEFT, padx=2)
 
         btn_row = ttk.Frame(f)
-        btn_row.grid(row=4, column=0, columnspan=2, sticky=tk.E, pady=(10, 0))
+        btn_row.grid(row=5, column=0, columnspan=2, sticky=tk.E, pady=(8, 0))
 
         def _save_cat():
+            self.hamlib_path = path_entry.get().strip()
             self.hamlib_model = _extract_model_id()
             self.hamlib_comm = com_entry.get().strip()
             self.hamlib_baud = baud_combo.get().strip()
@@ -1046,9 +1124,9 @@ class VaraBBSClient(tk.Tk):
             self.hamlib_port = port_entry.get().strip() or "4532"
             self.hamlib_enabled = enabled_var.get()
 
-            self.cat.update_config(self.hamlib_host, self.hamlib_port, self.hamlib_enabled)
+            self.cat.update_config(self.hamlib_host, self.hamlib_port, self.hamlib_enabled, custom_path=self.hamlib_path)
             self._save_data()
-            self.term_print(f"[*] Hamlib settings saved: Model {self.hamlib_model} on {self.hamlib_comm}@{self.hamlib_baud}\n")
+            self.term_print(f"[*] Hamlib settings saved: Model {self.hamlib_model} on {self.hamlib_comm}@{self.hamlib_baud} (Path: {self.hamlib_path or 'Auto'})\n")
             win.destroy()
 
         ttk.Button(btn_row, text="Cancel", command=win.destroy).pack(side=tk.LEFT, padx=4)

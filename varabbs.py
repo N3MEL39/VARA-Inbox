@@ -87,7 +87,7 @@ class VaraBBSClient(tk.Tk):
         self.trash_msgs = []
         self._load_data()
 
-        self.title(f"VARA HF/FM Mail & Terminal Client - [{self.current_call}]")
+        self.title(f"VARA HF/FM Mail & Terminal Client by N3MEL v3.5 - [{self.current_call}]")
         self.geometry(self.saved_geometry)
         self.after(50, self._maximize_window)
 
@@ -252,7 +252,10 @@ class VaraBBSClient(tk.Tk):
         if canvas and item:
             on_col, off_col = colors.get(led_name, ("#22c55e", "#1e3a24"))
             fill = on_col if state else off_col
-            canvas.itemconfig(item, fill=fill)
+            try:
+                canvas.itemconfig(item, fill=fill)
+            except Exception:
+                pass
 
     def _start_live_dcd_monitor(self):
         if self.dcd_monitor_thread and self.dcd_monitor_thread.is_alive():
@@ -276,7 +279,7 @@ class VaraBBSClient(tk.Tk):
             sock = None
             try:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(3.0)
+                sock.settimeout(2.0)
                 sock.connect((host, port))
                 self.after(0, lambda: self.set_modem_led("pwr", True))
                 sock.settimeout(0.5)
@@ -363,13 +366,13 @@ class VaraBBSClient(tk.Tk):
         dwell_sub = ttk.Frame(cfg_group)
         dwell_sub.grid(row=4, column=0, columnspan=2, sticky=tk.W, pady=4)
 
-        ttk.Label(dwell_sub, text="HF Dwell (s):").pack(side=tk.LEFT, padx=(0, 2))
+        ttk.Label(dwell_sub, text="Default HF Dwell (s):").pack(side=tk.LEFT, padx=(0, 2))
         hf_dwell_entry = ttk.Entry(dwell_sub, width=6)
         hf_dwell_entry.insert(0, self.hf_dwell)
         hf_dwell_entry.pack(side=tk.LEFT, padx=(0, 8))
         self.attach_context_menu(hf_dwell_entry)
 
-        ttk.Label(dwell_sub, text="FM Dwell (s):").pack(side=tk.LEFT, padx=(0, 2))
+        ttk.Label(dwell_sub, text="Default FM Dwell (s):").pack(side=tk.LEFT, padx=(0, 2))
         fm_dwell_entry = ttk.Entry(dwell_sub, width=6)
         fm_dwell_entry.insert(0, self.fm_dwell)
         fm_dwell_entry.pack(side=tk.LEFT)
@@ -516,7 +519,8 @@ class VaraBBSClient(tk.Tk):
         tree_sel = "#2563eb" if is_dark else "#3b82f6"
 
         self.configure(bg=bg_main)
-        self.left_canvas.configure(bg=bg_main)
+        if hasattr(self, "left_canvas"):
+            self.left_canvas.configure(bg=bg_main)
 
         self.style.theme_use("clam")
         self.style.configure(".", background=bg_main, foreground=fg_text)
@@ -636,9 +640,9 @@ class VaraBBSClient(tk.Tk):
         self.left_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
         def _on_left_mousewheel(event):
-            if event.num == 5 or event.delta < 0:
+            if event.num == 5 or getattr(event, "delta", 0) < 0:
                 self.left_canvas.yview_scroll(2, "units")
-            elif event.num == 4 or event.delta > 0:
+            elif event.num == 4 or getattr(event, "delta", 0) > 0:
                 self.left_canvas.yview_scroll(-2, "units")
             return "break"
 
@@ -665,10 +669,8 @@ class VaraBBSClient(tk.Tk):
         self.f_outbox = self.folder_tree.insert("", "end", text="Outbox (0)", values=("outbox",))
         self.f_sent = self.folder_tree.insert("", "end", text="Sent (0)", values=("sent",))
         self.f_trash = self.folder_tree.insert("", "end", text="Trash (0)", values=("trash",))
-        self.folder_tree.bind("<<TreeviewSelect>>", self._on_folder_select)
-        self.folder_tree.selection_set(self.f_inbox)
-
-        # Node & BBS Commands Grid
+        
+        # Grid Commands
         self.node_group = ttk.LabelFrame(self.scrollable_left, text="Node & BBS Commands", padding=6)
         self.node_group.pack(fill=tk.X, pady=(0, 6))
 
@@ -695,18 +697,25 @@ class VaraBBSClient(tk.Tk):
             btn = ttk.Button(self.node_group, text=label_text, command=lambda cmd=cmd_text: self.send_node_command(cmd))
             btn.grid(row=r, column=c, padx=2, pady=2, sticky=tk.EW)
 
-        # Configuration & Utilities Panel
+        # Control Panel (with HF/FM & Dwell adjustment together)
         panel_group = ttk.LabelFrame(self.scrollable_left, text="Station Controls & Utilities", padding=6)
         panel_group.pack(fill=tk.X, pady=(0, 6))
 
         mode_radio_row = ttk.Frame(panel_group)
         mode_radio_row.pack(fill=tk.X, pady=(1, 4))
-        ttk.Label(mode_radio_row, text="Modem:", font=("Arial", 8, "bold")).pack(side=tk.LEFT, padx=(0, 6))
+        
+        ttk.Label(mode_radio_row, text="Modem:", font=("Arial", 8, "bold")).pack(side=tk.LEFT, padx=(0, 4))
         self.op_mode_var = tk.StringVar(value=self.current_mode)
         rb_hf = ttk.Radiobutton(mode_radio_row, text="HF", variable=self.op_mode_var, value="HF", command=self._on_mode_radio_select)
-        rb_hf.pack(side=tk.LEFT, padx=3)
+        rb_hf.pack(side=tk.LEFT, padx=2)
         rb_fm = ttk.Radiobutton(mode_radio_row, text="FM", variable=self.op_mode_var, value="FM", command=self._on_mode_radio_select)
-        rb_fm.pack(side=tk.LEFT, padx=3)
+        rb_fm.pack(side=tk.LEFT, padx=2)
+
+        ttk.Label(mode_radio_row, text="Dwell (s):", font=("Arial", 8, "bold")).pack(side=tk.LEFT, padx=(8, 2))
+        self.dwell_entry = ttk.Entry(mode_radio_row, width=6)
+        self.dwell_entry.insert(0, self.hf_dwell if self.current_mode == "HF" else self.fm_dwell)
+        self.dwell_entry.pack(side=tk.LEFT, padx=2)
+        self.attach_context_menu(self.dwell_entry)
 
         ttk.Separator(panel_group, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=4)
 
@@ -782,9 +791,9 @@ class VaraBBSClient(tk.Tk):
         self.msg_table.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         def _on_tree_mousewheel(event):
-            if event.num == 5 or event.delta < 0:
+            if event.num == 5 or getattr(event, "delta", 0) < 0:
                 self.msg_table.yview_scroll(1, "units")
-            elif event.num == 4 or event.delta > 0:
+            elif event.num == 4 or getattr(event, "delta", 0) > 0:
                 self.msg_table.yview_scroll(-1, "units")
             return "break"
 
@@ -821,6 +830,9 @@ class VaraBBSClient(tk.Tk):
         self.term_view.bind("<Double-Button-1>", self._on_term_double_click)
         self.term_print("[*] Workstation ready. VARA engine active.\n")
 
+        self.folder_tree.bind("<<TreeviewSelect>>", self._on_folder_select)
+        self.folder_tree.selection_set(self.f_inbox)
+
     def _on_term_double_click(self, event):
         index = self.term_view.index(f"@{event.x},{event.y}")
         line_start = f"{index.split('.')[0]}.0"
@@ -854,14 +866,23 @@ class VaraBBSClient(tk.Tk):
         bbs_names = [c["bbs"] for c in active_contacts]
         self.bbs_combo["values"] = bbs_names
 
+        default_dwell = self.hf_dwell if self.current_mode == "HF" else self.fm_dwell
+
         if bbs_names:
             first_c = active_contacts[0]
             self.bbs_combo.set(first_c["bbs"])
             self.digi_entry.delete(0, tk.END)
             self.digi_entry.insert(0, first_c.get("digi", ""))
+            
+            if hasattr(self, "dwell_entry"):
+                self.dwell_entry.delete(0, tk.END)
+                self.dwell_entry.insert(0, str(first_c.get("dwell", default_dwell)))
         else:
             self.bbs_combo.set("")
             self.digi_entry.delete(0, tk.END)
+            if hasattr(self, "dwell_entry"):
+                self.dwell_entry.delete(0, tk.END)
+                self.dwell_entry.insert(0, str(default_dwell))
 
     def _on_mode_change(self):
         restart_listener = self.listener_active
@@ -886,10 +907,15 @@ class VaraBBSClient(tk.Tk):
     def _on_bbs_selected(self, event=None):
         selected_bbs = self.bbs_combo.get().strip().upper()
         active_contacts = self._get_active_contacts()
+        default_dwell = self.hf_dwell if self.current_mode == "HF" else self.fm_dwell
+
         for contact in active_contacts:
             if contact["bbs"] == selected_bbs:
                 self.digi_entry.delete(0, tk.END)
                 self.digi_entry.insert(0, contact.get("digi", ""))
+                if hasattr(self, "dwell_entry"):
+                    self.dwell_entry.delete(0, tk.END)
+                    self.dwell_entry.insert(0, str(contact.get("dwell", default_dwell)))
                 break
 
     def add_bbs_station(self):
@@ -897,6 +923,8 @@ class VaraBBSClient(tk.Tk):
         digi = self.digi_entry.get().strip().upper()
         mode = self.current_mode
         default_dwell = self.hf_dwell if mode == "HF" else self.fm_dwell
+        
+        current_dwell = self.dwell_entry.get().strip() if hasattr(self, "dwell_entry") and self.dwell_entry.get().strip() else default_dwell
 
         if not new_bbs:
             messagebox.showwarning("Warning", "Enter a callsign in the Target BBS box.")
@@ -907,6 +935,7 @@ class VaraBBSClient(tk.Tk):
         for contact in active_contacts:
             if contact["bbs"] == new_bbs:
                 contact["digi"] = digi
+                contact["dwell"] = current_dwell
                 updated = True
                 break
 
@@ -914,7 +943,7 @@ class VaraBBSClient(tk.Tk):
             active_contacts.append({
                 "bbs": new_bbs,
                 "digi": digi,
-                "dwell": default_dwell
+                "dwell": current_dwell
             })
 
         self.bbs_combo["values"] = [c["bbs"] for c in active_contacts]
@@ -922,7 +951,7 @@ class VaraBBSClient(tk.Tk):
         self._save_data()
 
         digi_info = f" via {digi}" if digi else ""
-        self.term_print(f"[*] Saved {new_bbs}{digi_info} to {mode} contacts list.\n")
+        self.term_print(f"[*] Saved {new_bbs}{digi_info} ({current_dwell}s dwell) to {mode} contacts list.\n")
 
     def delete_bbs_station(self):
         selected_bbs = self.bbs_combo.get().strip().upper()
@@ -987,7 +1016,8 @@ class VaraBBSClient(tk.Tk):
         selected = self.folder_tree.selection()
         if not selected:
             return "inbox", self.inbox_msgs
-        tag = self.folder_tree.item(selected[0], "values")[0]
+        vals = self.folder_tree.item(selected[0], "values")
+        tag = vals[0] if (vals and len(vals) > 0) else "inbox"
         stores = {
             "inbox": self.inbox_msgs,
             "drafts": self.draft_msgs,
@@ -1217,7 +1247,7 @@ class VaraBBSClient(tk.Tk):
             self.term_print(f"[*] Saved {m_type} message draft.\n")
             win.destroy()
 
-        def deposit_to_pbbs():
+        def deposit_to_pbBS():
             dest = to_combo.get().strip().upper()
             subj = subj_entry.get().strip()
             body = body_text.get("1.0", tk.END).strip()
@@ -1256,4 +1286,829 @@ class VaraBBSClient(tk.Tk):
             _remember_recipient(dest)
             self.outbox_msgs.append({"type": m_type, "to": dest, "subj": subj, "body": body})
             self._save_data()
-            self._update_folder_
+            self._update_folder_counts()
+            self._on_folder_select(None)
+            self.term_print(f"[*] Queued outbound {m_type} message for {dest} to Outbox.\n")
+            win.destroy()
+
+        ttk.Button(btn_row, text="Save as Draft", command=save_draft).pack(side=tk.LEFT, padx=3)
+        ttk.Button(btn_row, text="Deposit to PBBS", command=deposit_to_pbBS).pack(side=tk.LEFT, padx=3)
+        ttk.Button(btn_row, text="Queue to Outbox (Remote BBS)", command=queue_outbound).pack(side=tk.LEFT, padx=3)
+
+    # ==========================================
+    # SESSION LAUNCHERS
+    # ==========================================
+    def _prepare_session(self):
+        if self.mailbox_in_session:
+            messagebox.showwarning("Busy", "A caller is currently connected to your Mailbox.")
+            return None
+
+        if self.worker_thread and self.worker_thread.is_alive():
+            messagebox.showwarning("Busy", "A connection session is already active.")
+            return None
+
+        if self.listener_active:
+            self._stop_listener_service()
+
+        target_bbs = self.bbs_combo.get().strip().upper()
+        if not target_bbs:
+            messagebox.showerror("Error", "Please select or enter a Target BBS.")
+            return None
+
+        raw_digi = self.digi_entry.get().strip().upper()
+        my_call = self.current_call
+        host = self.current_host
+        bw = self.current_bw
+        signature = self.current_signature
+        mode = self.current_mode
+
+        try:
+            cmd_port = int(self.current_cmd_port)
+            data_port = int(self.current_data_port)
+        except ValueError:
+            messagebox.showerror("Error", "Command and Data ports must be numbers.")
+            return None
+
+        # Parse dwell from the UI entry box
+        default_dwell = self.hf_dwell if mode == "HF" else self.fm_dwell
+        raw_dwell = self.dwell_entry.get().strip() if hasattr(self, "dwell_entry") else default_dwell
+        try:
+            dwell_val = float(raw_dwell)
+            if dwell_val < 0:
+                dwell_val = 1.5
+        except ValueError:
+            dwell_val = float(default_dwell)
+
+        str_dwell = str(dwell_val)
+
+        # Update contact record with current digi & dwell from last connect
+        active_contacts = self._get_active_contacts()
+        updated = False
+        for contact in active_contacts:
+            if contact["bbs"] == target_bbs:
+                contact["digi"] = raw_digi
+                contact["dwell"] = str_dwell
+                updated = True
+                break
+
+        if not updated:
+            active_contacts.append({
+                "bbs": target_bbs,
+                "digi": raw_digi,
+                "dwell": str_dwell
+            })
+            self.bbs_combo["values"] = [c["bbs"] for c in active_contacts]
+
+        self._save_data()
+
+        self.title(f"VARA HF/FM Mail & Terminal Client - [{my_call}]")
+        self.abort_requested = False
+        while not self.tx_manual_queue.empty():
+            self.tx_manual_queue.get_nowait()
+
+        self.btn_send_rcv.config(state=tk.DISABLED)
+        self.btn_manual_conn.config(state=tk.DISABLED)
+        self.btn_disconnect.config(state=tk.NORMAL)
+        self.btn_listen.config(state=tk.DISABLED)
+
+        return host, target_bbs, raw_digi, bw, cmd_port, data_port, my_call, signature, mode, dwell_val
+
+    def start_auto_session(self):
+        params = self._prepare_session()
+        if not params:
+            return
+        self.worker_thread = threading.Thread(target=self._run_auto_session, args=params, daemon=True)
+        self.worker_thread.start()
+
+    def start_manual_session(self):
+        params = self._prepare_session()
+        if not params:
+            return
+        self.worker_thread = threading.Thread(target=self._run_manual_session, args=params[:-1], daemon=True)
+        self.worker_thread.start()
+
+    # ==========================================
+    # VARA NETWORKING & TRANSMIT ENGINE
+    # ==========================================
+    def _connect_rf(self, host, target_bbs, raw_digi, bw, cmd_port, data_port, my_call):
+        self.update_status(f"Connecting ({host})...", "orange")
+        self.term_print(f"[*] Opening sockets to {host} (Cmd:{cmd_port}, Data:{data_port})...\n")
+
+        try:
+            self.cmd_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.cmd_sock.settimeout(5.0)
+            self.cmd_sock.connect((host, cmd_port))
+
+            self.data_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.data_sock.settimeout(5.0)
+            self.data_sock.connect((host, data_port))
+        except Exception as e:
+            self.term_print(f"[!] Socket connection error: {e}\n")
+            self.update_status("Connection Refused", "red")
+            return False
+
+        self.cmd_sock.sendall(f"MYCALL {my_call}\r".encode("ascii"))
+        time.sleep(0.1)
+        self.cmd_sock.sendall(f"{bw}\r".encode("ascii"))
+        time.sleep(0.1)
+
+        self.set_modem_led("pwr", True)
+
+        if self.abort_requested:
+            return False
+
+        clean_digi = re.sub(r'^(VIA|V)\s+', '', raw_digi.strip(), flags=re.IGNORECASE)
+
+        if clean_digi:
+            conn_cmd = f"CONNECT {my_call} {target_bbs} VIA {clean_digi}\r"
+            disp_call = f"{target_bbs} via {clean_digi}"
+        else:
+            conn_cmd = f"CONNECT {my_call} {target_bbs}\r"
+            disp_call = target_bbs
+
+        self.update_status(f"Calling {disp_call}...", "blue")
+        self.term_print(f"[*] Issuing RF command: {conn_cmd.strip()} ({bw})...\n")
+        self.cmd_sock.sendall(conn_cmd.encode("ascii"))
+
+        threading.Thread(target=self._monitor_vara_cmd_telemetry, daemon=True).start()
+
+        connected = False
+        start_t = time.time()
+        self.cmd_sock.settimeout(1.0)
+
+        while time.time() - start_t < 60:
+            if self.abort_requested:
+                return False
+            try:
+                resp = self.cmd_sock.recv(1024).decode("latin-1", errors="ignore")
+                if "CONNECTED" in resp and "DISCONNECTED" not in resp:
+                    connected = True
+                    self.set_modem_led("conn", True)
+                    break
+                elif "DISCONNECTED" in resp:
+                    break
+            except socket.timeout:
+                pass
+
+        if not connected or self.abort_requested:
+            self.set_modem_led("conn", False)
+            self.update_status("Disconnected / Timeout", "red")
+            self.term_print("[!] Connection failed or timed out.\n")
+            return False
+
+        self.update_status(f"Connected to {target_bbs}", "green")
+        self.term_print(f"[+] RF Link established with {target_bbs}!\n\n")
+        return True
+
+    def _monitor_vara_cmd_telemetry(self):
+        while self.cmd_sock and not self.abort_requested:
+            try:
+                self.cmd_sock.settimeout(0.4)
+                line = self.cmd_sock.recv(512).decode("latin-1", errors="ignore")
+                if not line:
+                    break
+
+                if "PTT ON" in line:
+                    self.after(0, lambda: self.set_modem_led("tx", True))
+                elif "PTT OFF" in line:
+                    self.after(0, lambda: self.set_modem_led("tx", False))
+
+                if "BUSY ON" in line or "DCD ON" in line:
+                    self.after(0, lambda: self.set_modem_led("dcd", True))
+                elif "BUSY OFF" in line or "DCD OFF" in line:
+                    self.after(0, lambda: self.set_modem_led("dcd", False))
+
+                if "DISCONNECTED" in line:
+                    self.after(0, lambda: self.set_modem_led("conn", False))
+
+            except socket.timeout:
+                pass
+            except Exception:
+                break
+        self.after(0, lambda: self.set_modem_led("tx", False))
+        self.after(0, lambda: self.set_modem_led("conn", False))
+        self.after(0, lambda: self.set_modem_led("dcd", False))
+
+    def _create_inbox_messages_from_rm(self, raw_text):
+        clean_text = raw_text.replace("\r\n", "\n").replace("\r", "\n")
+        clean_text = re.sub(r'\n[^\n]*[>?]\s*$', '', clean_text).strip()
+
+        split_pattern = r'(?m)(?=^(?:Msg|Message)\s*#?\s*:?\s*\d+|^(?:From|F):\s*[A-Za-z0-9\-@/.]+)'
+        raw_parts = re.split(split_pattern, clean_text)
+        my_call = self.current_call
+
+        created_count = 0
+        for part in raw_parts:
+            item_text = part.strip()
+            if not item_text or len(item_text) < 15:
+                continue
+
+            item_text = re.sub(r'^[^\n]*[>:]\s*\n?', '', item_text).strip()
+
+            id_m = re.search(r'(?:Msg|Message)\s*#?\s*:?\s*(\d+)', item_text, re.IGNORECASE)
+            from_m = re.search(r'(?:From|F):\s*([A-Za-z0-9\-@/.]+)', item_text, re.IGNORECASE)
+            to_m = re.search(r'(?:To|T):\s*([A-Za-z0-9\-@/.]+)', item_text, re.IGNORECASE)
+            subj_m = re.search(r'(?:Subject|Subj):\s*(.*)', item_text, re.IGNORECASE)
+
+            if not id_m and not from_m:
+                continue
+
+            assigned_id = id_m.group(1) if id_m else str(len(self.inbox_msgs) + 1)
+            sender = from_m.group(1).strip() if from_m else "BBS"
+            recipient = to_m.group(1).strip() if to_m else my_call
+            subject = subj_m.group(1).strip() if subj_m else f"Message #{assigned_id}"
+            msg_date = time.strftime("%m/%d %H:%M")
+
+            if any(existing.get("id") == assigned_id and existing.get("from") == sender for existing in self.inbox_msgs):
+                continue
+
+            self.inbox_msgs.append({
+                "id": assigned_id, "from": sender, "to": recipient,
+                "subj": subject, "date": msg_date, "body": item_text
+            })
+            created_count += 1
+            self.term_print(f"[+] Saved message #{assigned_id} from {sender} to {recipient} - '{subject}'\n")
+
+        if created_count > 0:
+            self._save_data()
+            def _refresh():
+                self._update_folder_counts()
+                self._on_folder_select(None)
+            self.after(0, _refresh)
+
+        return created_count
+
+    def _run_auto_session(self, host, target_bbs, raw_digi, bw, cmd_port, data_port, my_call, signature, mode, dwell_val):
+        try:
+            if not self._connect_rf(host, target_bbs, raw_digi, bw, cmd_port, data_port, my_call):
+                return
+
+            self._handle_auto_bbs_exchange(signature, mode, dwell_val)
+
+            if not self.abort_requested:
+                self.update_status("Disconnecting...", "orange")
+                self._send_data("B\r")
+                time.sleep(2.0)
+                if self.cmd_sock:
+                    try:
+                        self.cmd_sock.sendall(b"DISCONNECT\r")
+                    except Exception:
+                        pass
+                self.update_status("Done / Idle", "gray")
+                self.term_print("[*] Automated session complete. Disconnected.\n")
+
+        except Exception as e:
+            if not self.abort_requested:
+                self.update_status("Error", "red")
+                self.term_print(f"[!] Session Exception: {e}\n")
+        finally:
+            self._disconnect_vara()
+            self._reset_ui_buttons()
+
+    def _handle_auto_bbs_exchange(self, signature, mode, dwell_val):
+        initial_timeout = 40.0 if mode == "HF" else 15.0
+        banner = self._recv_data_until_prompt(timeout=initial_timeout, quiet_delay=1.5)
+        if self.abort_requested:
+            return
+
+        if "command:" in banner.lower() or "}" in banner:
+            self.term_print("[*] Connected to Node switch. Sending 'BBS' command...\n")
+            self._send_data("BBS\r")
+            node_timeout = 40.0 if mode == "HF" else 12.0
+            self._recv_data_until_prompt(timeout=node_timeout, quiet_delay=1.5)
+            if self.abort_requested:
+                return
+
+        self.term_print(f"[*] Dwell delay ({dwell_val}s) before command dispatch...\n")
+        start_wait = time.time()
+        while time.time() - start_wait < dwell_val:
+            if self.abort_requested:
+                return
+            time.sleep(0.1)
+
+        self.term_print(">>> RM\n")
+        self._send_data("RM\r")
+
+        rm_timeout = 40.0 if mode == "HF" else 25.0
+        rm_resp = self._recv_data_until_prompt(timeout=rm_timeout, quiet_delay=1.5)
+        if self.abort_requested:
+            return
+
+        if rm_resp and "no message" not in rm_resp.lower() and len(rm_resp.strip()) > 10:
+            self._create_inbox_messages_from_rm(rm_resp)
+        else:
+            self.term_print("[*] No unread messages returned by RM.\n")
+
+        while self.outbox_msgs and not self.abort_requested:
+            msg = self.outbox_msgs.pop(0)
+            cmd_prefix = msg.get("type", "SP").upper()
+
+            start_w = time.time()
+            while time.time() - start_w < dwell_val:
+                if self.abort_requested:
+                    break
+                time.sleep(0.1)
+
+            self.term_print(f">>> {cmd_prefix} {msg['to']}\n")
+            self._send_data(f"{cmd_prefix} {msg['to']}\r")
+
+            self._recv_data_until_prompt(timeout=40.0 if mode == "HF" else 15.0, quiet_delay=1.2)
+            if self.abort_requested:
+                break
+
+            start_w = time.time()
+            while time.time() - start_w < dwell_val:
+                if self.abort_requested:
+                    break
+                time.sleep(0.1)
+
+            self.term_print(f">>> {msg['subj']}\n")
+            self._send_data(f"{msg['subj']}\r")
+
+            self._recv_data_until_prompt(timeout=40.0 if mode == "HF" else 15.0, quiet_delay=1.2)
+            if self.abort_requested:
+                break
+
+            start_w = time.time()
+            while time.time() - start_w < dwell_val:
+                if self.abort_requested:
+                    break
+                time.sleep(0.1)
+
+            body_content = msg['body'].strip()
+            if signature:
+                sig_check = signature.splitlines()[0]
+                if sig_check and sig_check not in body_content:
+                    body_content = f"{body_content}\n\n{signature}"
+
+            clean_body = body_content.replace("\r\n", "\r").replace("\n", "\r")
+            payload = f"{clean_body}\r/EX\r"
+
+            self.term_print(">>> [Sending Message Body + /EX]\n")
+            self._send_data(payload)
+
+            self._recv_data_until_prompt(timeout=40.0 if mode == "HF" else 20.0, quiet_delay=1.5)
+
+            msg["date"] = time.strftime("%m/%d %H:%M")
+            self.sent_msgs.append(msg)
+            self.term_print(f"[+] Message successfully posted as {cmd_prefix} to {msg['to']}!\n")
+
+        self._save_data()
+        self.after(0, self._update_folder_counts)
+        self.after(0, lambda: self._on_folder_select(None))
+
+    def _run_manual_session(self, host, target_bbs, raw_digi, bw, cmd_port, data_port, my_call, signature, mode):
+        try:
+            if not self._connect_rf(host, target_bbs, raw_digi, bw, cmd_port, data_port, my_call):
+                return
+
+            self.term_print("[*] Terminal active. Type commands above, or use shortcuts on left.\n\n")
+            self.data_sock.settimeout(0.3)
+            self.cmd_sock.settimeout(0.3)
+
+            while not self.abort_requested:
+                while not self.tx_manual_queue.empty():
+                    cmd = self.tx_manual_queue.get_nowait()
+                    self._send_data(f"{cmd}\r")
+                    if cmd.upper() in ["B", "BYE", "QUIT"]:
+                        self.term_print("[*] Logoff recognized. Terminating link...\n")
+                        time.sleep(2.0)
+                        self.abort_requested = True
+                        break
+
+                if self.abort_requested:
+                    break
+
+                try:
+                    chunk = self.data_sock.recv(2048).decode("latin-1", errors="ignore")
+                    if chunk:
+                        self.term_print(chunk)
+                except socket.timeout:
+                    pass
+                except Exception:
+                    break
+
+                try:
+                    cmd_resp = self.cmd_sock.recv(1024).decode("latin-1", errors="ignore")
+                    if "DISCONNECTED" in cmd_resp:
+                        self.term_print("\n[!] Remote BBS disconnected.\n")
+                        break
+                except socket.timeout:
+                    pass
+                except Exception:
+                    break
+
+            if self.cmd_sock:
+                try:
+                    self.cmd_sock.sendall(b"DISCONNECT\r")
+                except Exception:
+                    pass
+            self.update_status("Done / Idle", "gray")
+            self.term_print("[*] Session terminated. Disconnected.\n")
+
+        except Exception as e:
+            if not self.abort_requested:
+                self.update_status("Error", "red")
+                self.term_print(f"[!] Session Exception: {e}\n")
+        finally:
+            self._disconnect_vara()
+            self._reset_ui_buttons()
+
+    # ==========================================
+    # INCOMING MAILBOX & LISTENER
+    # ==========================================
+    def toggle_mailbox_listener(self):
+        if self.listener_active:
+            self._stop_listener_service()
+            self.btn_listen.config(text="Mailbox Standby")
+            self.update_status("Standby Disabled", "gray")
+            self.term_print("[*] Mailbox listener disabled.\n")
+        else:
+            if self.worker_thread and self.worker_thread.is_alive():
+                messagebox.showwarning("Busy", "Cannot enable Standby during active outbound session.")
+                return
+            self._start_listener_service()
+
+    def _start_listener_service(self):
+        self.listener_stop_event.clear()
+        self.listener_thread = threading.Thread(target=self._run_mailbox_listener, daemon=True)
+        self.listener_thread.start()
+        self.listener_active = True
+        self.btn_listen.config(text="Stop Standby")
+
+    def _stop_listener_service(self):
+        self.listener_active = False
+        self.listener_stop_event.set()
+        try:
+            if self.listener_cmd_sock:
+                self.listener_cmd_sock.sendall(b"LISTEN OFF\rDISCONNECT\r")
+                time.sleep(0.1)
+                self.listener_cmd_sock.close()
+            if self.listener_data_sock:
+                self.listener_data_sock.close()
+        except Exception:
+            pass
+        self.listener_cmd_sock = None
+        self.listener_data_sock = None
+        self.mailbox_in_session = False
+        self.btn_listen.config(text="Mailbox Standby")
+
+    def _run_mailbox_listener(self):
+        host = self.current_host
+        my_call = self.current_call
+        mode = self.current_mode
+        bw = self.current_bw
+        try:
+            cmd_port = int(self.current_cmd_port)
+            data_port = int(self.current_data_port)
+        except ValueError:
+            return
+
+        self.update_status("Standby (Listening)", "green")
+        self.term_print(f"[*] Starting Mailbox Listener on VARA {mode} ({host}:{cmd_port}) for {my_call}...\n")
+
+        try:
+            self.listener_cmd_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.listener_cmd_sock.settimeout(5.0)
+            self.listener_cmd_sock.connect((host, cmd_port))
+
+            self.listener_data_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.listener_data_sock.settimeout(5.0)
+            self.listener_data_sock.connect((host, data_port))
+
+            self.listener_cmd_sock.sendall(f"MYCALL {my_call}\r".encode("ascii"))
+            time.sleep(0.1)
+            self.listener_cmd_sock.sendall(f"{bw}\r".encode("ascii"))
+            time.sleep(0.1)
+            self.listener_cmd_sock.sendall(b"LISTEN ON\r")
+            self.set_modem_led("pwr", True)
+            self.term_print("[+] Modem configured. Personal Mailbox standing by for incoming connects...\n")
+        except Exception as e:
+            self.term_print(f"[!] Could not start Mailbox listener: {e}\n")
+            self.after(0, self._stop_listener_service)
+            return
+
+        self.listener_cmd_sock.settimeout(0.3)
+        self.listener_data_sock.settimeout(0.3)
+
+        cmd_buf = ""
+        while not self.listener_stop_event.is_set():
+            try:
+                cmd_data = self.listener_cmd_sock.recv(1024).decode("latin-1", errors="ignore")
+                if cmd_data:
+                    cmd_buf += cmd_data
+                    while "\r" in cmd_buf:
+                        line, cmd_buf = cmd_buf.split("\r", 1)
+                        line = line.strip()
+                        if line.startswith("CONNECTED"):
+                            parts = line.split()
+                            self.remote_call = parts[1].upper() if len(parts) > 1 else "CALLER"
+                            self.mailbox_in_session = True
+                            self.set_modem_led("conn", True)
+                            self.update_status(f"Caller: {self.remote_call}", "blue")
+                            self.term_print(f"\n[+] Incoming RF Connect from {self.remote_call}!\n")
+                            self._send_mailbox_welcome(my_call, mode)
+                        elif line.startswith("DISCONNECTED"):
+                            if self.mailbox_in_session:
+                                self.term_print(f"\n[*] {self.remote_call} disconnected from Mailbox.\n")
+                                self.mailbox_in_session = False
+                                self.remote_call = ""
+                                self.mb_state = "CMD"
+                                self.set_modem_led("conn", False)
+                                self.update_status("Standby (Listening)", "green")
+            except socket.timeout:
+                pass
+            except Exception:
+                break
+
+            if self.mailbox_in_session:
+                try:
+                    data_in = self.listener_data_sock.recv(2048).decode("latin-1", errors="ignore")
+                    if data_in:
+                        self.term_print(f"[{self.remote_call}] " + data_in)
+                        self._process_mailbox_input(data_in, my_call)
+                except socket.timeout:
+                    pass
+                except Exception:
+                    break
+
+        self.after(0, self._stop_listener_service)
+
+    def _send_listener_data(self, txt):
+        if self.listener_data_sock:
+            try:
+                self.listener_data_sock.sendall(txt.encode("latin-1"))
+            except Exception:
+                pass
+
+    def _send_mailbox_welcome(self, my_call, mode):
+        self.mb_state = "CMD"
+        self.mb_line_buffer = ""
+        
+        caller_base = self.remote_call.split('-')[0].upper()
+        matching_mail = [
+            m for m in self.inbox_msgs 
+            if str(m.get("to", "")).strip().upper() in (self.remote_call, caller_base)
+        ]
+        
+        if matching_mail:
+            mail_alert = (
+                f"\r\n*** YOU HAVE {len(matching_mail)} MESSAGE(S) WAITING IN THIS MAILBOX ***\r\n"
+                f"Type LM to list your messages or R <num> to read.\r\n"
+            )
+        else:
+            mail_alert = "\r\nNo personal mail waiting for you.\r\n"
+
+        welcome = (
+            f"\r\nWelcome to {my_call} Personal Mailbox [VARA {mode}]\r\n"
+            f"Current Station Time: {time.strftime('%Y-%m-%d %H:%M:%S')}\r\n"
+            f"{mail_alert}\r\n"
+            f"Type ? or H for help.\r\n\r\n"
+            f"{my_call} Mailbox > "
+        )
+        self._send_listener_data(welcome)
+
+    def _process_mailbox_input(self, raw_data, my_call):
+        self.mb_line_buffer += raw_data.replace("\n", "\r")
+        while "\r" in self.mb_line_buffer:
+            line, self.mb_line_buffer = self.mb_line_buffer.split("\r", 1)
+            line = line.strip()
+            if not line and self.mb_state == "CMD":
+                self._send_listener_data(f"{my_call} Mailbox > ")
+                continue
+            self._handle_mailbox_line(line, my_call)
+
+    def _handle_mailbox_line(self, line, my_call):
+        prompt = f"{my_call} Mailbox > "
+
+        if self.mb_state == "CMD":
+            cmd = line.upper()
+            
+            if cmd in ("?", "H", "HELP"):
+                help_text = (
+                    "\r\n--- Mailbox Commands ---\r\n"
+                    "L           - List all messages\r\n"
+                    "LM          - List messages addressed to you\r\n"
+                    "R <num>     - Read message by number\r\n"
+                    "SP <call>   - Send a private message\r\n"
+                    "SR <num>    - Send reply to a specific message\r\n"
+                    "KM <num>    - Kill/delete your message\r\n"
+                    "B, BYE, Q   - Disconnect\r\n\r\n"
+                )
+                self._send_listener_data(help_text + prompt)
+
+            elif cmd == "L":
+                resp = "\r\nMsg #   From       To         Date         Subject\r\n"
+                resp += "-" * 55 + "\r\n"
+                if not self.inbox_msgs:
+                    resp += "(No messages in mailbox)\r\n"
+                else:
+                    for i, m in enumerate(self.inbox_msgs):
+                        m_id = str(m.get("id", i + 1)).ljust(7)
+                        m_from = str(m.get("from", "N/A"))[:9].ljust(10)
+                        m_to = str(m.get("to", my_call))[:9].ljust(10)
+                        m_date = str(m.get("date", ""))[:12].ljust(12)
+                        m_subj = str(m.get("subj", "(No Subject)"))[:25]
+                        resp += f"{m_id} {m_from} {m_to} {m_date} {m_subj}\r\n"
+                self._send_listener_data(resp + "\r\n" + prompt)
+
+            elif cmd == "LM":
+                caller_base = self.remote_call.split('-')[0].upper()
+                resp = f"\r\nMessages addressed to {self.remote_call}:\r\n"
+                resp += "Msg #   From       Date         Subject\r\n"
+                resp += "-" * 50 + "\r\n"
+                matched = [
+                    m for m in self.inbox_msgs 
+                    if str(m.get("to", "")).strip().upper() in (self.remote_call, caller_base)
+                ]
+                if not matched:
+                    resp += "(No messages for your callsign)\r\n"
+                else:
+                    for i, m in enumerate(matched):
+                        m_id = str(m.get("id", i + 1)).ljust(7)
+                        m_from = str(m.get("from", "N/A"))[:9].ljust(10)
+                        m_date = str(m.get("date", ""))[:12].ljust(12)
+                        m_subj = str(m.get("subj", "(No Subject)"))[:25]
+                        resp += f"{m_id} {m_from} {m_date} {m_subj}\r\n"
+                self._send_listener_data(resp + "\r\n" + prompt)
+
+            elif cmd.startswith("R ") or (cmd.startswith("R") and len(cmd) > 1 and cmd[1:].isdigit()):
+                num_str = cmd[2:].strip() if cmd.startswith("R ") else cmd[1:].strip()
+                matched = next((m for m in self.inbox_msgs if str(m.get("id")) == num_str), None)
+                if matched:
+                    msg_body = (
+                        f"\r\nMessage #{num_str}\r\n"
+                        f"From:    {matched.get('from', 'N/A')}\r\n"
+                        f"To:      {matched.get('to', my_call)}\r\n"
+                        f"Date:    {matched.get('date', 'N/A')}\r\n"
+                        f"Subject: {matched.get('subj', '')}\r\n"
+                        f"{'-'*45}\r\n"
+                        f"{matched.get('body', '')}\r\n"
+                        f"{'-'*45}\r\n\r\n"
+                    )
+                    self._send_listener_data(msg_body + prompt)
+                else:
+                    self._send_listener_data(f"\r\nMessage #{num_str} not found.\r\n\r\n{prompt}")
+
+            elif cmd.startswith("SR ") or (cmd.startswith("SR") and len(cmd) > 2 and cmd[2:].isdigit()):
+                num_str = cmd[3:].strip() if cmd.startswith("SR ") else cmd[2:].strip()
+                matched = next((m for m in self.inbox_msgs if str(m.get("id")) == num_str), None)
+                if matched:
+                    orig_from = matched.get("from", "").strip().upper()
+                    dest_call = orig_from if orig_from and orig_from != "BBS" else my_call
+                    orig_subj = matched.get("subj", "").strip()
+                    reply_subj = orig_subj if orig_subj.upper().startswith("RE:") else f"RE: {orig_subj}"
+                    
+                    self.mb_rx_msg = {
+                        "from": self.remote_call, "to": dest_call,
+                        "subj": reply_subj, "body": "", "type": "SP"
+                    }
+                    self.mb_state = "SP_BODY"
+                    self._send_listener_data(
+                        f"\r\nReplying to Message #{num_str} (To: {dest_call})\r\n"
+                        f"Subject: {reply_subj}\r\n"
+                        f"Enter message text. End with /EX or Ctrl+Z on a new line:\r\n"
+                    )
+                else:
+                    self._send_listener_data(f"\r\nMessage #{num_str} not found.\r\n\r\n{prompt}")
+
+            elif cmd.startswith("SP ") or cmd.startswith("SB "):
+                dest_call = cmd.split(maxsplit=1)[1].strip().upper()
+                if not dest_call:
+                    self._send_listener_data(f"\r\nError: Destination callsign required.\r\n{prompt}")
+                    return
+                self.mb_rx_msg = {
+                    "from": self.remote_call, "to": dest_call,
+                    "subj": "", "body": "", "type": "SP" if cmd.startswith("SP") else "SB"
+                }
+                self.mb_state = "SP_SUBJ"
+                self._send_listener_data("Enter Subject: ")
+
+            elif cmd.startswith("KM ") or (cmd.startswith("KM") and len(cmd) > 2 and cmd[2:].isdigit()):
+                num_str = cmd[3:].strip() if cmd.startswith("KM ") else cmd[2:].strip()
+                matched = next((m for m in self.inbox_msgs if str(m.get("id")) == num_str), None)
+                if matched:
+                    caller_base = self.remote_call.split('-')[0].upper()
+                    m_to = str(matched.get("to", "")).strip().upper()
+                    m_from = str(matched.get("from", "")).strip().upper()
+
+                    if self.remote_call in (m_to, m_from) or caller_base in (m_to, m_from):
+                        self.inbox_msgs.remove(matched)
+                        self.trash_msgs.append(matched)
+                        self._save_data()
+                        self.after(0, self._update_folder_counts)
+                        self.after(0, lambda: self._on_folder_select(None))
+                        self._send_listener_data(f"\r\nMessage #{num_str} deleted.\r\n\r\n{prompt}")
+                    else:
+                        self._send_listener_data(f"\r\nError: You do not own message #{num_str}.\r\n\r\n{prompt}")
+                else:
+                    self._send_listener_data(f"\r\nMessage #{num_str} not found.\r\n\r\n{prompt}")
+
+            elif cmd in ("B", "BYE", "Q", "QUIT"):
+                self._send_listener_data(f"\r\n73 from {my_call}. Logging off...\r\n")
+                time.sleep(1.0)
+                if self.listener_cmd_sock:
+                    try:
+                        self.listener_cmd_sock.sendall(b"DISCONNECT\r")
+                    except Exception:
+                        pass
+            else:
+                self._send_listener_data(f"\r\nUnknown command: '{line}'. Type ? for help.\r\n\r\n{prompt}")
+
+        elif self.mb_state == "SP_SUBJ":
+            self.mb_rx_msg["subj"] = line if line else "(No Subject)"
+            self.mb_state = "SP_BODY"
+            self._send_listener_data("Enter text. End with /EX or Ctrl+Z on a blank line:\r\n")
+
+        elif self.mb_state == "SP_BODY":
+            if line.upper() in ("/EX", "\x1a", "EX"):
+                assigned_id = str(len(self.inbox_msgs) + 1)
+                self.mb_rx_msg["id"] = assigned_id
+                self.mb_rx_msg["date"] = time.strftime("%m/%d %H:%M")
+                self.inbox_msgs.append(dict(self.mb_rx_msg))
+                self._save_data()
+
+                self.after(0, self._update_folder_counts)
+                self.after(0, lambda: self._on_folder_select(None))
+
+                self.term_print(f"[+] Mailbox received new message #{assigned_id} from {self.mb_rx_msg['from']}.\n")
+                self._send_listener_data(f"\r\nMessage #{assigned_id} stored successfully.\r\n\r\n{prompt}")
+                self.mb_state = "CMD"
+                self.mb_rx_msg = {}
+            else:
+                self.mb_rx_msg["body"] = (self.mb_rx_msg.get("body", "") + line + "\n")
+
+    # ==========================================
+    # NETWORKING HELPERS & UI RESET
+    # ==========================================
+    def _send_data(self, text):
+        if self.data_sock:
+            try:
+                self.data_sock.sendall(text.encode("latin-1"))
+            except Exception as e:
+                self.term_print(f"[!] Socket Send Error: {e}\n")
+
+    def _recv_data_until_prompt(self, timeout=20.0, quiet_delay=1.5):
+        accumulated = ""
+        last_rx_time = time.time()
+        start_time = time.time()
+        
+        if not self.data_sock:
+            return ""
+
+        self.data_sock.settimeout(0.3)
+        while time.time() - start_time < timeout:
+            if self.abort_requested:
+                break
+            try:
+                chunk = self.data_sock.recv(2048).decode("latin-1", errors="ignore")
+                if chunk:
+                    accumulated += chunk
+                    self.term_print(chunk)
+                    last_rx_time = time.time()
+            except socket.timeout:
+                if accumulated and (time.time() - last_rx_time >= quiet_delay):
+                    break
+            except Exception:
+                break
+        return accumulated
+
+    def manual_disconnect(self):
+        self.abort_requested = True
+        self.update_status("Aborting...", "red")
+        self.term_print("[*] Manual abort initiated by user.\n")
+        if self.cmd_sock:
+            try:
+                self.cmd_sock.sendall(b"ABORT\rDISCONNECT\r")
+            except Exception:
+                pass
+
+    def _disconnect_vara(self):
+        try:
+            if self.data_sock:
+                self.data_sock.close()
+            if self.cmd_sock:
+                self.cmd_sock.close()
+        except Exception:
+            pass
+        self.data_sock = None
+        self.cmd_sock = None
+        self.after(0, lambda: self.set_modem_led("conn", False))
+        self.after(0, lambda: self.set_modem_led("tx", False))
+
+    def _reset_ui_buttons(self):
+        def _reset():
+            self.btn_send_rcv.config(state=tk.NORMAL)
+            self.btn_manual_conn.config(state=tk.NORMAL)
+            self.btn_disconnect.config(state=tk.DISABLED)
+            self.btn_listen.config(state=tk.NORMAL)
+            self.update_status("Idle", "gray")
+        if threading.current_thread() is threading.main_thread():
+            _reset()
+        else:
+            self.after(0, _reset)
+
+
+if __name__ == "__main__":
+    app = VaraBBSClient()
+    app.mainloop()
