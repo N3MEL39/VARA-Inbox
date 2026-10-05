@@ -11,7 +11,7 @@ Choose the script that matches your station layout and operating environment:
 | Feature / Scenario | `varabbshl.py` (Hamlib Integrated) | `varabbs.py` (Split / Standalone) |
 | :--- | :--- | :--- |
 | **Typical Station Setup** | **Single PC (All-in-One):** The Python client and VARA modems run on the same Windows PC directly connected to the radio. | **Network / Cross-Platform:** The Python client runs on one system (e.g., Linux / Raspberry Pi OS) while VARA modems run on a dedicated Windows machine. |
-| **CAT & PTT Handling** | **Embedded Hamlib (`rigctld`):** Intercepts VARA telemetry to execute serial CAT PTT commands, radio filter selection, and dial frequency tuning directly. | **External / Offloaded:** No internal Hamlib engine. PTT and rig control are handled natively by the VARA installation on the Windows PC or via standard radio interface hardware (e.g., soundcard VOX, RA-board PTT). |
+| **CAT & PTT Handling** | **Embedded Hamlib (`rigctld`):** Intercepts VARA telemetry to execute serial CAT PTT commands, radio filter selection, and dial frequency tuning directly. Install Hamlib from links below. | **External / Offloaded:** No internal Hamlib engine. PTT and rig control are handled natively by the VARA installation on the Windows PC or via standard radio interface hardware (e.g., soundcard VOX, RA-board PTT). |
 | **Host Operating System** | Primarily Windows (where local COM ports and `rigctld.exe` reside alongside VARA). | Linux, macOS, or Windows (ideal for low-power Linux terminals accessing remote Windows VARA modems over LAN). |
 
 ---
